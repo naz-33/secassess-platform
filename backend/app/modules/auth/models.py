@@ -1,7 +1,8 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, func, Enum
+from typing import Optional
+from sqlalchemy import String, DateTime, Boolean, Integer, func, Enum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -10,6 +11,7 @@ from app.core.database import Base
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
     ASSESSOR = "assessor"
+    VIEWER = "viewer"
 
 
 class User(Base):
@@ -28,6 +30,20 @@ class User(Base):
         Enum(UserRole, native_enum=False),
         default=UserRole.ASSESSOR,
         nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    locked_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

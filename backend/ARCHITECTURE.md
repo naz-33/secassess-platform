@@ -114,3 +114,4 @@ Specialized extensions:
 | `verification` | `verifications` | Human-in-the-loop review decisions confirming or rejecting findings |
 | `reporting` | `reports` | PDF / Word report document compilation and archival |
 | `dashboard` | *(none)* | Read-only metric aggregations for frontend charts |
+

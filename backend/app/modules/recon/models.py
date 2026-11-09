@@ -30,6 +30,12 @@ class Asset(Base):
         index=True,
         nullable=False,
     )
+    scan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("scans.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
     type: Mapped[AssetType] = mapped_column(
         Enum(AssetType, native_enum=False),
         nullable=False,

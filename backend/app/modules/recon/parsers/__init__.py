@@ -1,4 +1,4 @@
-"""Recon parsers package."""
+"""Parsers for reconnaissance outputs."""
 from app.modules.recon.parsers.nmap_parser import NmapParser
 from app.modules.recon.parsers.dns_parser import DnsParser
 

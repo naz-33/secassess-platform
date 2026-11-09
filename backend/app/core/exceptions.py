@@ -43,3 +43,59 @@ class ScopeViolationException(ForbiddenException):
         super().__init__(
             detail=f"Asset '{asset}' is OUT OF SCOPE or unauthorized for target '{target_id}'"
         )
+
+
+class ConflictException(AppException):
+    def __init__(self, detail: str = "Resource conflict or invalid state transition"):
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail,
+        )
+
+
+class PayloadTooLargeException(AppException):
+    def __init__(self, detail: str = "Payload or file size exceeds maximum permitted limit"):
+        super().__init__(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=detail,
+        )
+
+
+class UnsupportedMediaTypeException(AppException):
+    def __init__(self, detail: str = "Unsupported media type or file format"):
+        super().__init__(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=detail,
+        )
+
+
+class UnprocessableEntityException(AppException):
+    def __init__(self, detail: str = "Unprocessable entity validation error"):
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=detail,
+        )
+
+
+class RateLimitException(AppException):
+    def __init__(self, detail: str = "AI rate limit or usage quota exceeded"):
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail,
+        )
+
+
+class BadGatewayException(AppException):
+    def __init__(self, detail: str = "AI provider returned an upstream error"):
+        super().__init__(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=detail,
+        )
+
+
+class ServiceUnavailableException(AppException):
+    def __init__(self, detail: str = "AI service temporarily unavailable or unconfigured"):
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=detail,
+        )

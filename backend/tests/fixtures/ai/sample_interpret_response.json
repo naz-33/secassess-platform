@@ -1,0 +1,30 @@
+{
+  "summary": "Nmap scan revealed open HTTP and HTTPS ports running web service.",
+  "key_observations": [
+    {
+      "observation": "Ports 80 and 443 are open.",
+      "why_it_matters": "Exposed web interfaces increase target attack surface.",
+      "evidence_ids": ["00000000-0000-0000-0000-000000000101"]
+    }
+  ],
+  "suggested_candidate_findings": [
+    {
+      "title": "Missing Security Headers",
+      "category": "security_headers",
+      "evidence_excerpt": "Ports 80 and 443 are open.",
+      "explanation": "Server lacks HSTS and CSP headers.",
+      "recommended_fix": "Add HSTS header.",
+      "description": "Server lacks HSTS and CSP headers.",
+      "suggested_severity": "low",
+      "confidence": "high",
+      "evidence_ids": ["00000000-0000-0000-0000-000000000101"],
+      "wstg_id": "WSTG-CONF-07",
+      "remediation": "Add HSTS header.",
+      "affected_url": "http://127.0.0.1:8000"
+    }
+  ],
+  "caveats": ["Banner information was not deeply interrogated."],
+  "confidence": "high",
+  "ai_generated": true,
+  "disclaimer": "AI-generated. Must be verified by an assessor against the evidence."
+}

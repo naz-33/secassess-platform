@@ -1,0 +1,19 @@
+{
+  "explanation": "The session cookie is missing the HttpOnly and Secure flags, exposing it to JavaScript reading.",
+  "likely_impact": "Malicious client scripts or MitM attacks could steal active sessions.",
+  "exploitability_notes": "Trivial if XSS is present or communication is unencrypted HTTP.",
+  "suggested_severity": "medium",
+  "remediation_steps": [
+    "Configure Set-Cookie header with '; Secure; HttpOnly; SameSite=Lax'",
+    "Audit all cookie-issuing endpoints in web application"
+  ],
+  "references": [
+    "WSTG-SESS-02",
+    "CWE-1004"
+  ],
+  "confidence": "high",
+  "caveats": ["Assumes modern user agent behavior."],
+  "ai_generated": true,
+  "disclaimer": "AI-generated. Must be verified by an assessor against the evidence."
+}
+

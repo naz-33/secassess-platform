@@ -60,3 +60,4 @@ def test_modular_monolith_import_boundaries():
                                 )
 
     assert not violations, "Module boundary violations detected:\n" + "\n".join(violations)
+

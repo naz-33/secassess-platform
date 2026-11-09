@@ -10,7 +10,7 @@ from app.modules.targets.models import Target, ScopeItem
 from app.modules.assessments.models import Assessment
 from app.modules.scans.models import Scan
 from app.modules.recon.models import Asset
-from app.modules.findings.models import Finding, Evidence
+from app.modules.findings.models import Finding, Evidence, SeverityChange
 from app.modules.ai_analysis.models import AIAnalysis
 from app.modules.verification.models import Verification
 from app.modules.reporting.models import Report
@@ -26,6 +26,7 @@ __all__ = [
     "Asset",
     "Finding",
     "Evidence",
+    "SeverityChange",
     "AIAnalysis",
     "Verification",
     "Report",

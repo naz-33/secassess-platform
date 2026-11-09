@@ -28,3 +28,4 @@ class AssessmentRepository:
                 select(Assessment).order_by(Assessment.created_at.desc()).limit(limit).offset(offset)
             ).scalars().all()
         )
+

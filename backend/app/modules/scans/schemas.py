@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, ConfigDict, Field
 from app.modules.scans.models import ScanTool, ScanStatus
 
 
@@ -11,8 +11,10 @@ class ScanBase(BaseModel):
     command: Optional[str] = None
 
 
-class ScanCreate(ScanBase):
-    pass
+class ScanCreate(BaseModel):
+    tool: ScanTool
+    target: Optional[str] = None
+    options: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
 class ScanRead(ScanBase):
@@ -21,5 +23,7 @@ class ScanRead(ScanBase):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     raw_output: Optional[str] = None
+    error: Optional[str] = None
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

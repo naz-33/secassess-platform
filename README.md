@@ -100,6 +100,7 @@ secassess/
 ```bash
 # 1. Clone repository and copy sample environment
 cp .env.example .env
+# Set GEMINI_API_KEY and ZAP_API_KEY in .env before enabling AI/ZAP features.
 
 # 2. Build and start core containers (Postgres, Backend, Frontend)
 make up
@@ -113,6 +114,10 @@ make seed
 # (Optional) Start lab target containers (OWASP Juice Shop & OWASP ZAP daemon)
 make up-targets
 ```
+
+The backend reaches ZAP at `http://zap:8080` on the Compose network. If running the
+backend directly on the host instead, set `ZAP_API_URL=http://localhost:8080`.
+Set `GEMINI_API_KEY` to enable interpretation and `AI_ENABLED=true` to allow AI calls.
 
 ### Option B: Local Development (Without Docker)
 
@@ -147,7 +152,7 @@ make up-targets
 | **API Docs (Swagger)** | `http://localhost:8000/docs` | Interactive OpenAPI documentation for all 12 modules |
 | **API Health Check** | `http://localhost:8000/api/v1/health` | Validates app state & `SELECT 1` DB connection |
 | **Juice Shop Target** | `http://localhost:3000` | (When started with `--profile targets`) |
-| **ZAP Daemon API** | `http://localhost:8080` | (When started with `--profile targets`) |
+| **ZAP Daemon API** | `http://localhost:8080` | Host-published URL; backend uses `http://zap:8080` in Docker |
 
 ### Synthetic Seed Credentials
 - **Admin**: `admin@secassess.local` / `AdminSecurePassword123!`

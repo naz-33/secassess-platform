@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Optional
 from sqlalchemy import String, DateTime, ForeignKey, func, Enum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -10,6 +11,7 @@ from app.core.database import Base
 class AssessmentStatus(str, enum.Enum):
     DRAFT = "draft"
     IN_PROGRESS = "in_progress"
+    RUNNING = "running"
     COMPLETED = "completed"
     ARCHIVED = "archived"
 
@@ -35,11 +37,11 @@ class Assessment(Base):
         default=AssessmentStatus.DRAFT,
         nullable=False,
     )
-    created_by: Mapped[uuid.UUID] = mapped_column(
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
         index=True,
-        nullable=False,
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -27,10 +27,23 @@ class TargetRepository:
         self.db.refresh(target)
         return target
 
+    def update(self, target: Target) -> Target:
+        self.db.commit()
+        self.db.refresh(target)
+        return target
+
+    def delete(self, target: Target) -> None:
+        self.db.delete(target)
+        self.db.commit()
+
     def list_all(self, limit: int = 100, offset: int = 0) -> List[Target]:
         return list(
             self.db.execute(
-                select(Target).options(selectinload(Target.scope_items)).limit(limit).offset(offset)
+                select(Target)
+                .options(selectinload(Target.scope_items))
+                .order_by(Target.created_at.desc())
+                .limit(limit)
+                .offset(offset)
             ).scalars().all()
         )
 
@@ -46,3 +59,12 @@ class TargetRepository:
                 select(ScopeItem).where(ScopeItem.target_id == target_id)
             ).scalars().all()
         )
+
+    def get_scope_item_by_id(self, scope_item_id: uuid.UUID) -> Optional[ScopeItem]:
+        return self.db.execute(
+            select(ScopeItem).where(ScopeItem.id == scope_item_id)
+        ).scalar_one_or_none()
+
+    def delete_scope_item(self, scope_item: ScopeItem) -> None:
+        self.db.delete(scope_item)
+        self.db.commit()

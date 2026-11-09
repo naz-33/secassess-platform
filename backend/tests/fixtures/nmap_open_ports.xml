@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV -oX - -p 80,443,22 192.168.1.50" start="1700000000" version="7.94">
+  <host>
+    <status state="up" reason="arp-response"/>
+    <address addr="192.168.1.50" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="web-server.local" type="user"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="8.9p1" extrainfo="Ubuntu-3ubuntu0.4" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="nginx" version="1.18.0" extrainfo="Ubuntu" method="probed"/>
+      </port>
+      <port protocol="tcp" portid="443">
+        <state state="closed" reason="reset"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>
+

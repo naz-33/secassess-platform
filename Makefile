@@ -47,3 +47,4 @@ reset-db:
 	docker compose exec db sh -c 'until pg_isready -U postgres -d secassess; do sleep 1; done'
 	docker compose run --rm backend alembic upgrade head
 	docker compose run --rm backend python scripts/seed.py
+

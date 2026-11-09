@@ -36,3 +36,4 @@ def test_openapi_docs_available(client: TestClient):
     ]
     for prefix in expected_prefixes:
         assert any(p.startswith(prefix) for p in paths), f"Expected endpoint matching prefix: {prefix}"
+

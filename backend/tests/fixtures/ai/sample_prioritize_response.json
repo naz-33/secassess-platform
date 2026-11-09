@@ -1,0 +1,29 @@
+{
+  "overall_risk_narrative": "Assessment findings indicate moderate risk centered around session and transport protections.",
+  "prioritized_findings": [
+    {
+      "finding_id": "00000000-0000-0000-0000-000000000201",
+      "rank": 1,
+      "rationale": "Cleartext session cookies allow traffic interception.",
+      "likely_impact": "Account takeover via eavesdropping on untrusted networks.",
+      "exploitability_notes": "Requires network positioning between client and server.",
+      "suggested_severity": "high",
+      "remediation_steps": [
+        "Enforce Secure attribute on session cookie",
+        "Enable HSTS with long max-age"
+      ],
+      "references": [
+        "WSTG-SESS-02",
+        "CWE-614",
+        "OWASP-A05:2021"
+      ],
+      "confidence": "high",
+      "caveats": ["Assumes target uses unencrypted HTTP."]
+    }
+  ],
+  "confidence": "high",
+  "caveats": ["Rankings reflect likelihood and asset impact without internal business context."],
+  "ai_generated": true,
+  "disclaimer": "AI-generated. Must be verified by an assessor against the evidence."
+}
+

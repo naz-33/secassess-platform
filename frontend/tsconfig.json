@@ -14,17 +14,17 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Linting */
+    /* Linting / Strictness */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    /* Paths */
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
+    },
+    "types": ["vitest/globals", "@testing-library/jest-dom/vitest"]
   },
-  "include": ["src"]
+  "include": ["src", "vite-env.d.ts"]
 }

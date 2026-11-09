@@ -58,3 +58,4 @@ class ScopeItem(Base):
     )
 
     target: Mapped["Target"] = relationship("Target", back_populates="scope_items")
+

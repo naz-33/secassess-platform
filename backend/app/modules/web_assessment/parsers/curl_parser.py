@@ -8,3 +8,4 @@ class CurlParser:
     def parse_response(self, response_data: Dict[str, Any]) -> Dict[str, Any]:
         # TODO: Parse missing security headers, cookie flags, etc.
         return {}
+

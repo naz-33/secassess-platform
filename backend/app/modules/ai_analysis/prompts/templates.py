@@ -21,3 +21,4 @@ SUMMARIZE_PROMPT = """
 Generate an executive summary of the security posture and findings for the assessment:
 {assessment_summary}
 """
+

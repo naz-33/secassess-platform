@@ -1,8 +1,8 @@
 import uuid
 from typing import Optional, List
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from app.modules.auth.models import User
+from app.modules.auth.models import User, UserRole
 
 
 class UserRepository:
@@ -15,7 +15,8 @@ class UserRepository:
         return self.db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
 
     def get_by_email(self, email: str) -> Optional[User]:
-        return self.db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        clean = email.strip().lower()
+        return self.db.execute(select(User).where(func.lower(User.email) == clean)).scalar_one_or_none()
 
     def create(self, user: User) -> User:
         self.db.add(user)
@@ -23,5 +24,15 @@ class UserRepository:
         self.db.refresh(user)
         return user
 
+    def update(self, user: User) -> User:
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
     def list_all(self, limit: int = 100, offset: int = 0) -> List[User]:
-        return list(self.db.execute(select(User).limit(limit).offset(offset)).scalars().all())
+        stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def count_by_role(self, role: UserRole) -> int:
+        stmt = select(func.count(User.id)).where(User.role == role)
+        return self.db.execute(stmt).scalar_one() or 0

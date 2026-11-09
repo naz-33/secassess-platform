@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Text, DateTime, ForeignKey, Enum
+from sqlalchemy import Text, DateTime, ForeignKey, Enum, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -20,6 +20,7 @@ class ScanStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    REJECTED = "rejected"
 
 
 class Scan(Base):
@@ -56,3 +57,9 @@ class Scan(Base):
         nullable=True,
     )
     raw_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )

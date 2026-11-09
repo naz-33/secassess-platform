@@ -1,0 +1,24 @@
+HTTP/1.1 200 OK
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none';
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: geolocation=(), microphone=(), camera=()
+Content-Type: text/html; charset=UTF-8
+Content-Length: 412
+Date: Sun, 08 Nov 2026 12:00:00 GMT
+Connection: keep-alive
+Set-Cookie: session_id=0123456789abcdef0123456789abcdef; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Hardened Corporate Portal</title>
+</head>
+<body>
+  <h1>Welcome to Secure Portal</h1>
+</body>
+</html>
+

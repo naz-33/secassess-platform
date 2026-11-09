@@ -1,0 +1,35 @@
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Feature-Policy: payment 'self'
+X-Recruiting: /#/jobs
+Accept-Ranges: bytes
+Cache-Control: public, max-age=0
+Last-Modified: Sun, 08 Nov 2026 08:00:00 GMT
+ETag: W/"7fb-1854938db02"
+Content-Type: text/html; charset=UTF-8
+Content-Length: 2043
+Vary: Accept-Encoding
+Date: Sun, 08 Nov 2026 12:00:00 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Server: Express
+Set-Cookie: language=en; Path=/
+Set-Cookie: welcomebanner_status=dismiss; Path=/; Max-Age=86400
+
+<!-- TODO: remove test credentials before production deploy -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>OWASP Juice Shop</title>
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="assets/public/favicon_js.ico">
+</head>
+<body class="mat-app-background bluegrey-lightgrey-theme">
+  <app-root></app-root>
+</body>
+</html>
+

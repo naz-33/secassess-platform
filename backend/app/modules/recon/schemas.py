@@ -7,6 +7,7 @@ from app.modules.recon.models import AssetType
 
 class AssetBase(BaseModel):
     assessment_id: uuid.UUID
+    scan_id: Optional[uuid.UUID] = None
     type: AssetType
     value: str
     details: Optional[dict[str, Any]] = None

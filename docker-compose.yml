@@ -38,8 +38,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:-supersecretjwtkeyforuniversityprojecttestingonly12345}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      ZAP_API_URL: ${ZAP_API_URL:-http://zap:8080}
       ZAP_API_KEY: ${ZAP_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_ENABLED: ${AI_ENABLED:-true}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@secassess.local}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-AdminSecurePassword123!}
       SEED_ASSESSOR_EMAIL: ${SEED_ASSESSOR_EMAIL:-assessor@secassess.local}
@@ -84,9 +87,31 @@ services:
     container_name: secassess-zap
     profiles:
       - targets
-    command: zap.sh -daemon -host 0.0.0.0 -port 8080 -config api.key=${ZAP_API_KEY:-change-me-zap-api-key-token} -config api.addrs.addr.name=.* -config api.addrs.addr.regex=true
+    command:
+      - zap.sh
+      - -daemon
+      - -host
+      - 0.0.0.0
+      - -port
+      - "8080"
+      - -config
+      - api.key=${ZAP_API_KEY:-}
+      - -config
+      - api.addrs.addr.name=.*
+      - -config
+      - api.addrs.addr.regex=true
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      ZAP_API_KEY: ${ZAP_API_KEY:-}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS --get --data-urlencode "apikey=$${ZAP_API_KEY}" http://127.0.0.1:8080/JSON/core/view/version/ > /dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     networks:
       - secassess_net
 

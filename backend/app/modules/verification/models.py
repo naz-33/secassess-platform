@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Text, DateTime, ForeignKey, Enum, func
+from sqlalchemy import Text, DateTime, ForeignKey, Enum, Boolean, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -40,6 +40,11 @@ class Verification(Base):
         nullable=False,
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence_reviewed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
