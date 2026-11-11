@@ -89,63 +89,178 @@ secassess/
 
 ## 3. Prerequisites
 
-- **Docker & Docker Compose** (or local Python 3.12+, Node.js 20+, PostgreSQL 16+)
-- **Make** (optional, recommended)
+- **Git** to clone the repository.
+- **Docker Desktop** on Windows or macOS, or Docker Engine with the Compose plugin on Linux. Docker Compose v2 is used with the `docker compose` command.
+- **PostgreSQL 16 is included in the Docker setup.** You do not need to install PostgreSQL separately unless you choose the native, non-Docker setup below.
+- For native development without Docker: Python 3.12+, Node.js 20+, and PostgreSQL 16+.
+- **Make** is optional; the commands below work without it.
 
 ---
 
-## 4. Quick Start
+## 4. Run on Your Computer (Recommended: Docker)
 
-### Option A: Using Docker Compose & Makefile
+These steps work on Windows, macOS, and Linux. On Windows, run the commands in PowerShell. Install and start Docker Desktop first, then wait until it reports that Docker is running.
 
-```bash
-# 1. Clone repository and copy sample environment
-cp .env.example .env
-# Set GEMINI_API_KEY and ZAP_API_KEY in .env before enabling AI/ZAP features.
+### Step 1: Install Git and Docker
 
-# 2. Build and start core containers (Postgres, Backend, Frontend)
-make up
+- Install Git from [git-scm.com](https://git-scm.com/downloads).
+- Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows or macOS. On Linux, install Docker Engine and the Compose plugin by following the [Docker Engine guide](https://docs.docker.com/engine/install/).
+- Open a terminal and check that both tools are available:
 
-# 3. Apply database migrations (creates all 12 tables)
-make migrate
-
-# 4. Seed initial accounts and sample target (OWASP Juice Shop)
-make seed
-
-# (Optional) Start lab target containers (OWASP Juice Shop & OWASP ZAP daemon)
-make up-targets
+```text
+git --version
+docker compose version
 ```
 
-The backend reaches ZAP at `http://zap:8080` on the Compose network. If running the
-backend directly on the host instead, set `ZAP_API_URL=http://localhost:8080`.
-Set `GEMINI_API_KEY` to enable interpretation and `AI_ENABLED=true` to allow AI calls.
+### Step 2: Clone the GitHub repository
 
-### Option B: Local Development (Without Docker)
+```text
+git clone https://github.com/naz-33/secassess-platform.git
+cd secassess-platform
+```
 
-1. **Database Setup**:
-   Ensure PostgreSQL is running locally on port 5432 with database `secassess` (as configured in `.env`).
+### Step 3: Create your local environment file
 
-2. **Backend**:
-   ```bash
-   cd backend
-   python -m venv .venv
-   source .venv/bin/activate  # Or on Windows: .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   alembic upgrade head
-   python scripts/seed.py
-   uvicorn app.main:app --reload --port 8000
-   ```
+The sample configuration is copied once when setting up a fresh clone. Use the command for your terminal:
 
-3. **Frontend**:
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
+```powershell
+Copy-Item .env.example .env
+```
+
+```bash
+cp .env.example .env
+```
+
+The Docker setup uses development defaults and does not require an AI API key. To use optional AI or ZAP integrations, edit `.env` and configure the relevant keys (`GEMINI_API_KEY` and/or `ZAP_API_KEY`). Do not share or commit your `.env` file. The sample credentials and secrets are for local development only; replace them before any non-local deployment.
+
+### Step 4: Build and start the application
+
+From the repository root, run:
+
+```text
+docker compose up --build -d
+```
+
+This builds the frontend and backend containers and starts them with PostgreSQL 16. The backend applies database migrations during startup. You do not need a local PostgreSQL installation or a separate migration command for this setup.
+
+Check that the containers are running:
+
+```text
+docker compose ps
+```
+
+Wait for the backend to finish its startup migrations. The API health URL below should report `"status": "ok"` and `"database": "ok"` before you continue.
+
+### Step 5: Create the sample accounts and target
+
+After the backend has started, run the idempotent seed script:
+
+```text
+docker compose exec backend python scripts/seed.py
+```
+
+This creates the sample admin and assessor accounts and registers the OWASP Juice Shop target. The target application itself is optional and is started in the next step.
+
+### Step 6: Open the app and sign in
+
+- Frontend: [http://localhost:5173](http://localhost:5173)
+- API health: [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health) — should report `"status": "ok"` and `"database": "ok"`.
+- API documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+Use one of these local demo accounts:
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | `admin@secassess.local` | `AdminSecurePassword123!` |
+| Assessor | `assessor@secassess.local` | `AssessorSecurePassword123!` |
+
+Change these development credentials before using the application beyond your own local machine.
+
+### Optional: Start the local security-testing lab
+
+To also start OWASP Juice Shop and OWASP ZAP, run this from the repository root:
+
+```text
+docker compose --profile targets up --build -d
+```
+
+Juice Shop is available at [http://localhost:3000](http://localhost:3000). Within Docker, the backend reaches ZAP at `http://zap:8080`; from a host-run backend, use `http://localhost:8080`. Only test systems you own or are explicitly authorized to assess. The included Juice Shop is intentionally vulnerable and is meant for local practice.
+
+### Stop or inspect the application
+
+Follow the service logs:
+
+```text
+docker compose logs -f
+```
+
+Press `Ctrl+C` to stop viewing logs. To stop the containers:
+
+```text
+docker compose down
+```
+
+`docker compose down` stops and removes the containers but preserves the PostgreSQL data volume, so your data remains for the next start. Avoid `docker compose down -v` unless you intend to delete that data.
+
+## 5. Native Development (Without Docker)
+
+Use this option only if you do not want Docker. Install Python 3.12+, Node.js 20+, and PostgreSQL 16+. Start PostgreSQL, create a database named `secassess` (for example, in pgAdmin or with `createdb -U postgres secassess`), and create `.env` from `.env.example` as described above. Update the database settings in `.env` to match your local PostgreSQL username and password; `DATABASE_URL` should use this format:
+
+```text
+postgresql+psycopg://<user>:<password>@localhost:5432/secassess
+```
+
+In PowerShell, install backend dependencies, migrate the database, seed the sample data, and start the API:
+
+```powershell
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+alembic upgrade head
+python scripts/seed.py
+uvicorn app.main:app --reload --port 8000
+```
+
+If PowerShell blocks virtual-environment activation, allow it for the current terminal only, then activate again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+On macOS or Linux, run these backend commands instead:
+
+```bash
+cd backend
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+alembic upgrade head
+python scripts/seed.py
+uvicorn app.main:app --reload --port 8000
+```
+
+Keep the backend running. Open a second terminal at the repository root and start the frontend:
+
+```powershell
+cd frontend
+npm install
+$env:VITE_BACKEND_URL = "http://localhost:8000"
+npm run dev
+```
+
+On macOS or Linux, set the proxy variable for the frontend command like this:
+
+```bash
+cd frontend
+npm install
+VITE_BACKEND_URL=http://localhost:8000 npm run dev
+```
 
 ---
 
-## 5. Service URLs & Default Credentials
+## 6. Service URLs
 
 | Service | URL | Notes |
 |---|---|---|
@@ -155,13 +270,9 @@ Set `GEMINI_API_KEY` to enable interpretation and `AI_ENABLED=true` to allow AI 
 | **Juice Shop Target** | `http://localhost:3000` | (When started with `--profile targets`) |
 | **ZAP Daemon API** | `http://localhost:8080` | Host-published URL; backend uses `http://zap:8080` in Docker |
 
-### Synthetic Seed Credentials
-- **Admin**: `admin@secassess.local` / `AdminSecurePassword123!`
-- **Assessor**: `assessor@secassess.local` / `AssessorSecurePassword123!`
-
 ---
 
-## 6. How to Add a New Backend Module
+## 7. How to Add a New Backend Module
 
 To maintain the modular monolith architecture:
 1. Create a folder under `backend/app/modules/<new_module>/`.
@@ -179,7 +290,7 @@ To maintain the modular monolith architecture:
 
 ---
 
-## 7. Verification & Testing Commands
+## 8. Verification & Testing Commands
 
 ```bash
 # Run backend tests using the isolated secassess_test database
