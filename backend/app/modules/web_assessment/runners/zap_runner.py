@@ -11,6 +11,53 @@ from app.modules.targets import ScopeManager
 from app.modules.web_assessment.parsers.zap_parser import parse_zap_alerts
 from app.modules.web_assessment.types import CandidateFinding
 
+MAX_SPIDER_DEPTH = 5
+MAX_SPIDER_URLS = 500
+
+
+def has_repeated_path_segment(url: str) -> bool:
+    """Return whether a decoded URL path contains any segment more than once."""
+    try:
+        path = urllib.parse.urlsplit(url).path
+    except ValueError:
+        return True
+    segments = [
+        urllib.parse.unquote(segment)
+        for segment in path.split("/")
+        if segment
+    ]
+    return len(segments) != len(set(segments))
+
+
+def filter_spidered_urls(
+    urls: List[str],
+    max_urls: Optional[int] = None,
+) -> List[str]:
+    """Drop recursive and duplicate endpoints, preserving order and enforcing a cap."""
+    configured_limit = settings.ZAP_SPIDER_MAX_URLS if max_urls is None else max_urls
+    limit = max(0, min(configured_limit, MAX_SPIDER_URLS))
+    if limit == 0:
+        return []
+    filtered: List[str] = []
+    seen = set()
+    for url in urls:
+        if has_repeated_path_segment(url):
+            continue
+        try:
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            continue
+        key = urllib.parse.urlunsplit(
+            (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, parsed.query, "")
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append(url)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
 
 class ZapRunner:
     """
@@ -96,6 +143,15 @@ class ZapRunner:
                     {"contextName": context_name, "regex": exclude_regex},
                 )
 
+        repeated_segment_regex = (
+            f"^{re.escape(target_url.rstrip('/'))}"
+            r"(?:/[^/?#]+)*/([^/?#]+)(?:/[^/?#]+)*/\1(?:/|[?#]|$)"
+        )
+        self._request(
+            "JSON/context/action/excludeFromContext/",
+            {"contextName": context_name, "regex": repeated_segment_regex},
+        )
+
         return context_id
 
     def run_spider(
@@ -106,9 +162,12 @@ class ZapRunner:
         max_duration_mins: int = 2,
     ) -> List[str]:
         """Trigger ZAP spider and poll until completion or timeout."""
+        effective_depth = max(0, min(int(max_depth), MAX_SPIDER_DEPTH))
+        max_urls = max(1, min(settings.ZAP_SPIDER_MAX_URLS, MAX_SPIDER_URLS))
         params: Dict[str, Any] = {
             "url": target_url,
-            "maxChildren": max_depth,
+            "maxDepth": effective_depth,
+            "maxChildren": max_urls,
             "recurse": "true",
         }
         if context_name:
@@ -117,16 +176,29 @@ class ZapRunner:
         data = self._request("JSON/spider/action/scan/", params)
         scan_id = data.get("scan")
         if not scan_id:
-            return []
+            raise RuntimeError("ZAP did not return a scan ID for the spider.")
 
         # Poll spider status
         deadline = time.time() + (max_duration_mins * 60)
+        completed = False
+        stop_requested = False
         while time.time() < deadline:
             status_data = self._request("JSON/spider/view/status/", {"scanId": scan_id})
             progress = int(status_data.get("status", "0"))
             if progress >= 100:
+                completed = True
                 break
+            if not stop_requested:
+                partial_results = self._request(
+                    "JSON/spider/view/results/",
+                    {"scanId": scan_id},
+                ).get("results", [])
+                if len(set(partial_results)) >= max_urls:
+                    self._request("JSON/spider/action/stop/", {"scanId": scan_id})
+                    stop_requested = True
             time.sleep(1.0)
+        if not completed:
+            raise TimeoutError(f"ZAP spider scan {scan_id} did not complete before its time limit.")
 
         # Retrieve spidered URLs
         results_data = self._request("JSON/spider/view/results/", {"scanId": scan_id})
@@ -135,11 +207,13 @@ class ZapRunner:
         # Filter spidered URLs strictly through ScopeManager
         in_scope_urls: List[str] = []
         for u in raw_urls:
+            if has_repeated_path_segment(u):
+                continue
             is_valid, _ = self.scope_manager.check_scope(self.target_id, u)
             if is_valid:
                 in_scope_urls.append(u)
 
-        return in_scope_urls
+        return filter_spidered_urls(in_scope_urls, max_urls=max_urls)
 
     def wait_for_passive_scan(self, max_wait_seconds: int = 30) -> None:
         """Poll until ZAP's passive scanner queue is drained."""
@@ -148,8 +222,9 @@ class ZapRunner:
             pscan_data = self._request("JSON/pscan/view/recordsToScan/")
             remaining = int(pscan_data.get("recordsToScan", "0"))
             if remaining == 0:
-                break
+                return
             time.sleep(1.0)
+        raise TimeoutError("ZAP passive scanner queue did not drain before its time limit.")
 
     def trigger_active_scan(
         self,
@@ -174,14 +249,18 @@ class ZapRunner:
         data = self._request("JSON/ascan/action/scan/", params)
         ascan_id = data.get("scan")
         if not ascan_id:
-            return
+            raise RuntimeError("ZAP did not return a scan ID for the active scan.")
 
         deadline = time.time() + (max_duration_mins * 60)
+        completed = False
         while time.time() < deadline:
             st = self._request("JSON/ascan/view/status/", {"scanId": ascan_id})
             if int(st.get("status", "0")) >= 100:
+                completed = True
                 break
             time.sleep(1.0)
+        if not completed:
+            raise TimeoutError(f"ZAP active scan {ascan_id} did not complete before its time limit.")
 
     def fetch_alerts(self, target_url: str) -> Tuple[List[Dict[str, Any]], str]:
         """Fetch all alerts recorded by ZAP for the target URL and return (alerts_list, raw_json_str)."""

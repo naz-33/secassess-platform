@@ -1,10 +1,9 @@
 import re
-import shlex
 import subprocess
 import time
 import urllib.parse
 import uuid
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.modules.audit import AuditService
@@ -13,6 +12,7 @@ from app.modules.web_assessment.types import CapturedResponse
 
 ALLOWED_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 DEFAULT_USER_AGENT = "SecAssess/1.0 Web Security Scanner"
+CURL_PARTIAL_FILE_EXIT_CODE = 18
 
 
 def parse_raw_curl_response(
@@ -21,6 +21,7 @@ def parse_raw_curl_response(
     method: str,
     elapsed_ms: float,
     max_body_bytes: int = 200000,
+    response_truncated: bool = False,
 ) -> CapturedResponse:
     """
     Parse curl's '-i' stdout output (headers + body) into a structured CapturedResponse.
@@ -34,7 +35,7 @@ def parse_raw_curl_response(
     status_code = 200
     headers_list: List[Tuple[str, str]] = []
     body = ""
-    truncated = False
+    truncated = response_truncated
 
     if len(header_blocks) >= 1:
         headers_section = header_blocks[0]
@@ -200,9 +201,30 @@ class CurlRunner:
                     text=True,
                     timeout=per_req_timeout + 5,
                 )
-                raw_out = proc.stdout
+                has_http_response = bool(
+                    re.search(r"^HTTP/\S+\s+\d{3}", proc.stdout or "", re.MULTILINE)
+                )
+                partial_transfer = (
+                    proc.returncode == CURL_PARTIAL_FILE_EXIT_CODE and has_http_response
+                )
+                if proc.returncode != 0 and not partial_transfer:
+                    error_detail = (proc.stderr or proc.stdout or "").strip()
+                    err_msg = (
+                        f"[CURL ERROR] Curl exited with status {proc.returncode} "
+                        f"for '{current_url}'."
+                    )
+                    if error_detail:
+                        err_msg += f" {error_detail}"
+                    overall_transcript += f"{err_msg}\n"
+                    return None, overall_transcript
+                raw_out = proc.stdout or ""
                 if proc.stderr:
-                    raw_out = f"{raw_out}\n[CURL ERROR] {proc.stderr}" if raw_out else proc.stderr
+                    overall_transcript += f"[CURL STDERR] {proc.stderr.strip()}\n"
+                if partial_transfer:
+                    overall_transcript += (
+                        "[CURL PARTIAL RESPONSE] Transfer ended before the declared "
+                        "Content-Length; findings are based on the received bytes.\n"
+                    )
             except FileNotFoundError:
                 err_msg = f"[EXEC ERROR] Curl binary '{settings.CURL_PATH}' not found on system PATH."
                 overall_transcript += f"{err_msg}\n"
@@ -223,6 +245,7 @@ class CurlRunner:
                 method=current_method,
                 elapsed_ms=t_elapsed,
                 max_body_bytes=max_size,
+                response_truncated=partial_transfer,
             )
             last_response = captured
             overall_transcript += f"\n--- Probe Transcript for {current_url} ---\n{captured.raw_text}\n"

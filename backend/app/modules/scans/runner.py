@@ -200,7 +200,9 @@ class ScanRunner:
 
         timeout = settings.SCAN_TIMEOUT_SECONDS
         raw_output = ""
+        parse_output = ""
         output_parts: list[str] = []
+        execution_errors: list[str] = []
 
         try:
             if scan.tool == ScanTool.DNS:
@@ -217,6 +219,10 @@ class ScanRunner:
                         text=True,
                         timeout=timeout,
                     )
+                    if proc.returncode != 0:
+                        execution_errors.append(
+                            f"{record_type} query exited with status {proc.returncode}"
+                        )
                     if proc.stdout:
                         output_parts.append(proc.stdout)
                         any_answer = any_answer or bool(proc.stdout.strip())
@@ -230,9 +236,11 @@ class ScanRunner:
                     if not proc.stdout.strip():
                         output_parts.append(f"No {record_type} records returned\n")
                     raw_output = "".join(output_parts)
+                parse_output = raw_output
                 if not any_answer:
-                    output_parts.append("No DNS data returned for any query.\n")
-                    scan.error = "DNS queries completed with no records returned."
+                    if not execution_errors:
+                        output_parts.append("No DNS data returned for any query.\n")
+                        scan.error = "DNS queries completed with no records returned."
                 raw_output = "".join(output_parts)
             else:
                 # Strict safe execution: shell=False, argv list, timeout enforced
@@ -244,6 +252,9 @@ class ScanRunner:
                     timeout=timeout,
                 )
                 raw_output = proc.stdout
+                parse_output = proc.stdout
+                if proc.returncode != 0:
+                    execution_errors.append(f"Scanner exited with status {proc.returncode}")
                 if proc.stderr and not raw_output:
                     raw_output = proc.stderr
                 elif proc.stderr:
@@ -253,7 +264,7 @@ class ScanRunner:
 
             # Parse discovered assets
             try:
-                parsed_assets = adapter.parse(raw_output)
+                parsed_assets = adapter.parse(parse_output)
             except Exception as parse_err:
                 scan.status = ScanStatus.FAILED
                 scan.error = f"Output parsing error: {parse_err}"
@@ -266,22 +277,28 @@ class ScanRunner:
                 )
                 return scan
 
-            if scan.tool == ScanTool.DNS:
-                existing_assets = self.recon_service.list_assets(scan.assessment_id)
-                existing_keys = {(asset.type.value, asset.value) for asset in existing_assets}
-                parsed_assets = [
-                    item
-                    for item in parsed_assets
-                    if (str(item.get("type", "host")).lower(), str(item.get("value", "")))
-                    not in existing_keys
-                ]
-
             # Store discovered assets in database
             self.recon_service.create_assets_from_scan(
                 assessment_id=scan.assessment_id,
                 scan_id=scan.id,
                 parsed_items=parsed_assets,
             )
+
+            if execution_errors:
+                scan.status = ScanStatus.FAILED
+                scan.error = "; ".join(execution_errors)
+                scan.finished_at = datetime.now(timezone.utc)
+                self.repository.update(scan)
+                self.audit_service.log_action(
+                    action="scan_failed",
+                    detail={
+                        "scan_id": str(scan.id),
+                        "error": scan.error,
+                        "partial_assets_count": len(parsed_assets),
+                    },
+                    user_id=user_id,
+                )
+                return scan
 
             scan.status = ScanStatus.COMPLETED
             scan.finished_at = datetime.now(timezone.utc)
@@ -314,9 +331,13 @@ class ScanRunner:
         except subprocess.TimeoutExpired as te:
             scan.status = ScanStatus.FAILED
             raw_partial = te.output if getattr(te, "output", None) else (getattr(te, "stdout", None) or "")
-            timeout_output = raw_output
+            timeout_output = raw_output or "".join(output_parts)
             if raw_partial:
-                timeout_output += str(raw_partial)
+                timeout_output += (
+                    raw_partial.decode("utf-8", errors="replace")
+                    if isinstance(raw_partial, bytes)
+                    else str(raw_partial)
+                )
             scan.raw_output = timeout_output
             scan.error = f"Scan execution timed out after {timeout} seconds"
             scan.finished_at = datetime.now(timezone.utc)

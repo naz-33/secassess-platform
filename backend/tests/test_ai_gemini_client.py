@@ -101,6 +101,7 @@ def test_transient_rate_limit_and_retry(mock_get_client, monkeypatch):
 def test_safety_filter_blocked_response(mock_get_client, monkeypatch):
     monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_mock_api_key")
+    monkeypatch.setattr(settings, "GEMINI_MODEL", "gemini-3.8-flash")
 
     mock_client = MagicMock()
     candidate = MagicMock()
@@ -118,6 +119,8 @@ def test_safety_filter_blocked_response(mock_get_client, monkeypatch):
             prompt_content="prompt",
             response_schema=ScanInterpretationResponse,
         )
+
+    assert mock_client.models.generate_content.call_args.kwargs["model"] == "gemini-3.8-flash"
 
 
 @patch("app.modules.ai_analysis.gemini_client._get_genai_client")

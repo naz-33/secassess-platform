@@ -42,7 +42,8 @@ secassess/
 │   │       ├── targets/        # Target definition + ScopeManager (mandatory boundary enforcement)
 │   │       ├── assessments/    # Assessment cycles
 │   │       ├── scans/          # Automated tool execution jobs and raw outputs
-│   │       ├── recon/          # Nmap and DNS runners & parsers -> assets
+│   │       ├── recon/          # Nmap and DNS parsers, asset catalog
+│   │       ├── scans/          # Safe Nmap/DNS adapters, execution, and scan lifecycle
 │   │       ├── web_assessment/ # OWASP ZAP, curl, and TLS check runners & parsers
 │   │       ├── findings/       # Vulnerabilities and evidence records
 │   │       ├── ai_analysis/    # Redacted LLM prompting, prompts/, and analysis records
@@ -181,8 +182,11 @@ To maintain the modular monolith architecture:
 ## 7. Verification & Testing Commands
 
 ```bash
-# Run backend unit tests and static module boundary checks
-pytest
+# Run backend tests using the isolated secassess_test database
+make test
+
+# Opt-in bounded end-to-end checks against local Juice Shop and ZAP only
+make test-local-lab
 
 # Run Python linter
 ruff check .
@@ -190,3 +194,9 @@ ruff check .
 # Test frontend build
 cd frontend && npm run build
 ```
+
+Backend tests require `TEST_DATABASE_URL` and fail closed unless it identifies a
+separate database whose name contains `test`. `make test` provisions and migrates
+the isolated Compose test database; it does not point tests at the application's
+database. All AI integrations are disabled or mocked in tests. The local-lab
+target leaves ZAP active scanning disabled and never scans public targets.

@@ -2,6 +2,10 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+import pytest
+
+from app.modules.findings import FindingSeverity
+from app.modules.web_assessment.types import CapturedResponse, CandidateFinding
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -69,6 +73,7 @@ def test_web_assessment_api_full_lifecycle(client: TestClient):
     mock_curl = MagicMock()
     mock_curl.stdout = raw_juiceshop
     mock_curl.stderr = ""
+    mock_curl.returncode = 0
 
     web_request = {
         "categories": [
@@ -86,6 +91,10 @@ def test_web_assessment_api_full_lifecycle(client: TestClient):
 
     with (
         patch("subprocess.run", return_value=mock_curl),
+        patch(
+            "app.modules.web_assessment.service.TlsRunner.check_tls",
+            return_value={"https_available": False, "raw_output": "TLS probe mocked"},
+        ),
         patch(
             "app.modules.web_assessment.service.ZapRunner.execute_zap_assessment",
             side_effect=ConnectionError("test ZAP outage"),
@@ -216,3 +225,116 @@ def test_web_assessment_scope_rejection_returns_403(client: TestClient):
         assert "OUT OF SCOPE" in blocked_res.text or "unauthorized" in blocked_res.text
         # Subprocess never executed!
         mock_subprocess.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("set_cookie", "expected_finding"),
+    [
+        ("", False),
+        ("session=observed-session-value; HttpOnly", True),
+    ],
+)
+def test_zap_session_finding_requires_observed_set_cookie(
+    client: TestClient,
+    set_cookie: str,
+    expected_finding: bool,
+):
+    target_response = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"ZAP Session Evidence Target {uuid.uuid4().hex[:8]}",
+            "base_url": "http://localhost:3000",
+        },
+    )
+    assert target_response.status_code == 201
+    assessment_response = client.post(
+        "/api/v1/assessments/",
+        json={
+            "name": f"ZAP Session Evidence Assessment {uuid.uuid4().hex[:8]}",
+            "target_id": target_response.json()["id"],
+        },
+    )
+    assert assessment_response.status_code == 201
+    assessment_id = assessment_response.json()["id"]
+
+    evidence_headers = [("Set-Cookie", set_cookie)] if set_cookie else []
+    responses = [
+        (
+            CapturedResponse(
+                url="http://localhost:3000/notfound_baseline",
+                method="GET",
+                status=404,
+            ),
+            "baseline response",
+        ),
+        (
+            CapturedResponse(
+                url="http://localhost:3000",
+                method="GET",
+                status=200,
+            ),
+            "root response",
+        ),
+        (
+            CapturedResponse(
+                url="http://localhost:3000/",
+                method="GET",
+                status=200,
+                headers=evidence_headers,
+            ),
+            "session evidence response",
+        ),
+    ]
+    candidate = CandidateFinding(
+        title="[ZAP] Session Cookie Missing HttpOnly",
+        category="session_management",
+        description="ZAP reported a session cookie configuration issue.",
+        severity=FindingSeverity.MEDIUM,
+        affected_url="http://localhost:3000/",
+        evidence_label="ZAP alert evidence",
+        evidence_content="unsupported alert evidence",
+    )
+
+    with (
+        patch(
+            "app.modules.web_assessment.service.CurlRunner.probe",
+            side_effect=responses,
+        ),
+        patch(
+            "app.modules.web_assessment.service.TlsRunner.check_tls",
+            return_value={"https_available": False, "raw_output": "TLS probe mocked"},
+        ),
+        patch(
+            "app.modules.web_assessment.service.ZapRunner.execute_zap_assessment",
+            return_value=([candidate], [], '{"alerts":[]}'),
+        ),
+    ):
+        scan_response = client.post(
+            f"/api/v1/assessments/{assessment_id}/web-assessment",
+            json={
+                "categories": ["session_management"],
+                "include_zap": True,
+                "options": {"delay_ms": 0, "max_requests": 5},
+            },
+        )
+
+    assert scan_response.status_code == 202
+    findings_response = client.get(
+        f"/api/v1/assessments/{assessment_id}/findings"
+    )
+    assert findings_response.status_code == 200
+    session_findings = [
+        finding
+        for finding in findings_response.json()
+        if finding["category"] == "session_management"
+    ]
+    assert bool(session_findings) is expected_finding
+    if expected_finding:
+        detail_response = client.get(
+            f"/api/v1/assessments/{assessment_id}/findings/{session_findings[0]['id']}"
+        )
+        assert detail_response.status_code == 200
+        evidence = detail_response.json()["evidences"]
+        assert len(evidence) == 1
+        assert "unsupported alert evidence" in evidence[0]["content"]
+        assert f"Set-Cookie: {set_cookie}" in evidence[0]["content"]

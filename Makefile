@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate revision seed test lint psql reset-db
+.PHONY: up down logs migrate revision seed test test-local-lab lint psql reset-db
 
 # Start core services (db, backend, frontend)
 up:
@@ -10,7 +10,7 @@ up-targets:
 
 # Stop and remove running containers
 down:
-	docker compose --profile targets down
+	docker compose --profile test --profile targets down
 
 # Stream container logs
 logs:
@@ -28,9 +28,14 @@ revision:
 seed:
 	docker compose exec backend python scripts/seed.py
 
-# Run test suite
+# Run backend tests against an isolated test database
 test:
-	docker compose exec backend pytest -v
+	docker compose --profile test run --rm test-runner
+
+# Run bounded scanner checks against the local Juice Shop and ZAP services
+test-local-lab:
+	docker compose --profile test --profile targets up -d test-db juice-shop zap
+	docker compose --profile test --profile targets run --rm -e RUN_LOCAL_LAB_TESTS=1 test-runner sh -c "alembic upgrade head && pytest -v tests/test_local_lab_assessment.py"
 
 # Run backend linter
 lint:
@@ -47,4 +52,3 @@ reset-db:
 	docker compose exec db sh -c 'until pg_isready -U postgres -d secassess; do sleep 1; done'
 	docker compose run --rm backend alembic upgrade head
 	docker compose run --rm backend python scripts/seed.py
-

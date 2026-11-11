@@ -43,7 +43,9 @@ modules/<module_name>/
 ```
 
 Specialized extensions:
-- `recon/` & `web_assessment/`: `runners/` (process execution wrappers) and `parsers/` (output translation).
+- `scans/`: allow-listed Nmap/DNS adapters and the shared scope-enforcing process runner.
+- `recon/`: Nmap/DNS output parsers and deduplicated asset cataloging with per-scan discovery history.
+- `web_assessment/`: curl/TLS runners, ZAP API integration, output parsers, and custom checks.
 - `ai_analysis/`: `prompts/`, `redaction.py`, `llm_client.py`.
 - `targets/`: `scope_manager.py` (authoritative scope boundary enforcement).
 - `reporting/`: `templates/` and `generators/` (DOCX & PDF document compilation).
@@ -114,4 +116,3 @@ Specialized extensions:
 | `verification` | `verifications` | Human-in-the-loop review decisions confirming or rejecting findings |
 | `reporting` | `reports` | PDF / Word report document compilation and archival |
 | `dashboard` | *(none)* | Read-only metric aggregations for frontend charts |
-

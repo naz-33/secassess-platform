@@ -1,23 +1,22 @@
 import datetime
 import urllib.parse
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.exceptions import NotFoundException, ScopeViolationException
 from app.modules.assessments import AssessmentService
 from app.modules.targets import TargetService
 from app.modules.audit import AuditService
 from app.modules.scans import ScanService, Scan, ScanStatus, ScanTool, ScanRead
 from app.modules.recon import ReconService
-from app.modules.findings import FindingService, FindingSeverity, EvidenceType
+from app.modules.findings import FindingService, EvidenceType
 from app.modules.web_assessment.types import CapturedResponse, CandidateFinding
 from app.modules.web_assessment.schemas import WebAssessmentRequest
 from app.modules.web_assessment.runners.curl_runner import CurlRunner
 from app.modules.web_assessment.runners.tls_runner import TlsRunner
-from app.modules.web_assessment.runners.zap_runner import ZapRunner
+from app.modules.web_assessment.runners.zap_runner import ZapRunner, filter_spidered_urls
 from app.modules.web_assessment.checks import (
     VALID_CATEGORIES,
     check_security_headers,
@@ -32,11 +31,50 @@ from app.modules.web_assessment.checks import (
     check_verbose_error_pages,
     check_sensitive_content,
     check_cookie_attributes,
-    check_session_fixation,
 )
 
 ALLOWED_OPTIONS = {"delay_ms", "max_requests", "per_request_timeout", "max_body_bytes"}
 ALLOWED_ZAP_OPTIONS = {"spider_max_depth", "spider_duration_mins", "run_active_scan"}
+
+
+def _candidate_identity(candidate: CandidateFinding) -> tuple[str, str, str]:
+    """Normalize known curl/ZAP title variants for cross-tool evidence merging."""
+    title = candidate.title.casefold().replace("[zap]", "").strip()
+    normalized = " ".join(title.split())
+    if (
+        ("content security policy" in normalized or "csp" in normalized)
+        and any(marker in normalized for marker in ("not set", "missing", "not present"))
+    ):
+        normalized = "missing content-security-policy header"
+    return candidate.category, candidate.severity.value, normalized
+
+
+def _merge_zap_with_curl_candidates(
+    candidates: List[CandidateFinding],
+) -> List[CandidateFinding]:
+    """Combine equivalent ZAP and curl findings while retaining both evidence sources."""
+    merged: List[CandidateFinding] = []
+    curl_candidates: Dict[tuple[str, str, str], CandidateFinding] = {}
+    for candidate in candidates:
+        identity = _candidate_identity(candidate)
+        is_zap = candidate.title.startswith("[ZAP]")
+        curl_match = curl_candidates.get(identity)
+        if is_zap and curl_match is not None:
+            curl_label = curl_match.evidence_label or "Curl check"
+            zap_label = candidate.evidence_label or "ZAP alert"
+            curl_evidence = curl_match.evidence_content or ""
+            zap_evidence = candidate.evidence_content or ""
+            curl_match.evidence_label = "Curl and ZAP evidence"
+            curl_match.evidence_content = (
+                f"[{curl_label}]\n{curl_evidence}\n\n"
+                f"[{zap_label}]\n{zap_evidence}"
+            )
+            continue
+
+        merged.append(candidate)
+        if not is_zap:
+            curl_candidates.setdefault(identity, candidate)
+    return merged
 
 
 class WebAssessmentService:
@@ -313,10 +351,71 @@ class WebAssessmentService:
                         spider_depth=zap_options.get("spider_max_depth"),
                         spider_duration=zap_options.get("spider_duration_mins"),
                     )
-                    all_candidates.extend(zap_candidates)
+                    cookie_responses: Dict[str, Optional[CapturedResponse]] = {
+                        response.url: response
+                        for response in captured_responses
+                    }
+                    for candidate in zap_candidates:
+                        if candidate.category != "session_management":
+                            all_candidates.append(candidate)
+                            continue
+
+                        observed_cookie_evidence: List[str] = []
+                        verified_urls: List[str] = []
+                        candidate_urls = candidate.affected_urls or [candidate.affected_url]
+                        for candidate_url in candidate_urls:
+                            evidence_response = cookie_responses.get(candidate_url)
+                            if candidate_url not in cookie_responses:
+                                evidence_response, evidence_log = curl_runner.probe(
+                                    candidate_url,
+                                    method="GET",
+                                )
+                                full_transcript += (
+                                    f"[ZAP SESSION EVIDENCE PROBE: {candidate_url}]\n"
+                                    f"{evidence_log}\n"
+                                )
+                                if evidence_response:
+                                    captured_responses.append(evidence_response)
+                                cookie_responses[candidate_url] = evidence_response
+
+                            set_cookie_headers = (
+                                evidence_response.get_headers("Set-Cookie")
+                                if evidence_response
+                                else []
+                            )
+                            if not set_cookie_headers:
+                                full_transcript += (
+                                    "[ZAP SESSION ALERT FILTERED] No captured Set-Cookie "
+                                    f"header supported the alert at {candidate_url}.\n"
+                                )
+                                continue
+
+                            verified_urls.append(candidate_url)
+                            observed_cookie_evidence.extend(
+                                [
+                                    f"URL: {candidate_url}",
+                                    *(
+                                        f"Set-Cookie: {header}"
+                                        for header in set_cookie_headers
+                                    ),
+                                ]
+                            )
+
+                        if not observed_cookie_evidence:
+                            continue
+
+                        candidate.affected_url = verified_urls[0]
+                        candidate.evidence_label = "ZAP Alert and Observed Set-Cookie Headers"
+                        candidate.evidence_content = (
+                            f"{candidate.evidence_content or ''}\n\n"
+                            "Observed Set-Cookie response headers:\n"
+                            + "\n".join(observed_cookie_evidence)
+                        )
+                        all_candidates.append(candidate)
                     full_transcript += f"ZAP Alerts JSON:\n{raw_zap_json}\n"
 
-                    # Register spidered in-scope URLs as endpoint assets
+                    # Keep endpoint assets bounded and remove duplicates before persistence.
+                    spidered_urls = filter_spidered_urls(spidered_urls)
                     if spidered_urls:
                         zap_assets = [
                             {
@@ -345,6 +444,8 @@ class WebAssessmentService:
                         },
                         user_id=user_id,
                     )
+
+            all_candidates = _merge_zap_with_curl_candidates(all_candidates)
 
             # 8. Ingest Candidate Findings with Deduplication & Immutable Evidence
             for cand in all_candidates:

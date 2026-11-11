@@ -9,7 +9,7 @@ from app.modules.audit.models import AuditLog
 from app.modules.targets.models import Target, ScopeItem
 from app.modules.assessments.models import Assessment
 from app.modules.scans.models import Scan
-from app.modules.recon.models import Asset
+from app.modules.recon.models import Asset, AssetDiscovery
 from app.modules.findings.models import Finding, Evidence, SeverityChange
 from app.modules.ai_analysis.models import AIAnalysis
 from app.modules.verification.models import Verification
@@ -24,6 +24,7 @@ __all__ = [
     "Assessment",
     "Scan",
     "Asset",
+    "AssetDiscovery",
     "Finding",
     "Evidence",
     "SeverityChange",

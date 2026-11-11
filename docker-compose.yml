@@ -19,7 +19,28 @@ services:
     networks:
       - secassess_net
 
+  test-db:
+    image: postgres:16
+    container_name: secassess-test-db
+    profiles:
+      - test
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: secassess_test
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d secassess_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - secassess_net
+
   backend:
+    image: secassess-backend
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -42,6 +63,7 @@ services:
       ZAP_API_KEY: ${ZAP_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       AI_ENABLED: ${AI_ENABLED:-true}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@secassess.local}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-AdminSecurePassword123!}
@@ -49,6 +71,30 @@ services:
       SEED_ASSESSOR_PASSWORD: ${SEED_ASSESSOR_PASSWORD:-AssessorSecurePassword123!}
     depends_on:
       db:
+        condition: service_healthy
+    networks:
+      - secassess_net
+
+  test-runner:
+    image: secassess-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles:
+      - test
+    command: sh -c "alembic upgrade head && pytest -v"
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@test-db:5432/secassess_test
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@test-db:5432/secassess_test
+      AI_ENABLED: "false"
+      GEMINI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      ZAP_API_URL: ${ZAP_API_URL:-http://zap:8080}
+      ZAP_API_KEY: ${ZAP_API_KEY:-}
+    depends_on:
+      test-db:
         condition: service_healthy
     networks:
       - secassess_net
@@ -118,6 +164,8 @@ services:
 volumes:
   postgres_data:
     name: secassess_postgres_data
+  test_postgres_data:
+    name: secassess_test_postgres_data
 
 networks:
   secassess_net:

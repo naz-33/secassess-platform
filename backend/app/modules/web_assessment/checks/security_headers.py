@@ -180,7 +180,7 @@ def check_cors_configuration(
     allow_cred = response.get_header("Access-Control-Allow-Credentials")
     is_cred_true = (allow_cred or "").lower() == "true"
 
-    if allow_origin == "*" and is_cred_true:
+    if allow_origin and allow_origin.strip() == "*" and is_cred_true:
         findings.append(
             CandidateFinding(
                 title="Insecure Permissive CORS (Wildcard with Credentials)",
@@ -194,6 +194,22 @@ def check_cors_configuration(
                 remediation="Do not combine wildcard origins with credentials. Use an explicit allow-list of trusted origins.",
                 evidence_label="Permissive CORS Headers",
                 evidence_content=f"Access-Control-Allow-Origin: {allow_origin}\nAccess-Control-Allow-Credentials: {allow_cred}",
+            )
+        )
+    elif allow_origin and allow_origin.strip() == "*":
+        findings.append(
+            CandidateFinding(
+                title="Wildcard Access-Control-Allow-Origin",
+                category="security_headers",
+                description="The response allows requests from any origin with 'Access-Control-Allow-Origin: *'.",
+                severity=FindingSeverity.LOW,
+                affected_url=response.url,
+                wstg_id="WSTG-CONF-07",
+                owasp_top10="A05:2021-Security Misconfiguration",
+                cwe="CWE-942",
+                remediation="Restrict Access-Control-Allow-Origin to the origins that require access.",
+                evidence_label="Wildcard CORS Response Header",
+                evidence_content=f"Access-Control-Allow-Origin: {allow_origin}",
             )
         )
 

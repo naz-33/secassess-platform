@@ -1,6 +1,5 @@
 import re
-import hashlib
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from app.modules.findings import FindingSeverity
 from app.modules.web_assessment.types import CapturedResponse, CandidateFinding
 
@@ -24,7 +23,8 @@ DEFAULT_EXPOSED_PATHS = [
 ]
 
 DIRECTORY_LISTING_REGEX = re.compile(
-    r"(<title>\s*Index of\s*|Directory listing for|Index of /|\[To Parent Directory\]|<pre><a href=)",
+    r"(<title>\s*Index of\s*|<title>\s*listing\s+directory\b|Directory listing for|"
+    r"Index of /|\[To Parent Directory\]|<pre><a href=)",
     re.IGNORECASE,
 )
 

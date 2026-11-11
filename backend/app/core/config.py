@@ -42,12 +42,13 @@ class Settings(BaseSettings):
     ZAP_API_KEY: str = ""
     ZAP_ALLOW_ACTIVE_SCAN: bool = False
     ZAP_SPIDER_MAX_DEPTH: int = 2
+    ZAP_SPIDER_MAX_URLS: int = 200
     ZAP_SPIDER_MAX_DURATION_MINS: int = 2
     ANTHROPIC_API_KEY: str = ""
 
     # Google Gemini AI Integration
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
     AI_ENABLED: bool = False
     AI_TIMEOUT_SECONDS: int = 30
     AI_MAX_RETRIES: int = 2

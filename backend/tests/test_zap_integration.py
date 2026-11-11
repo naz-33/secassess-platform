@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -47,6 +48,46 @@ def test_parse_zap_alerts_fixture():
     assert backup_cand.cwe == "CWE-548"
 
 
+def test_parse_zap_alerts_groups_urls_and_keeps_informational_alerts_out_of_findings():
+    alerts = [
+        {
+            "name": "Content Security Policy (CSP) Header Not Set",
+            "risk": "Medium",
+            "pluginId": "10038",
+            "url": f"http://localhost:3000/page/{index}",
+            "evidence": f"header-missing-{index}",
+        }
+        for index in range(113)
+    ]
+    alerts.append(
+        {
+            "name": "Modern Web Application",
+            "risk": "Informational",
+            "pluginId": "10109",
+            "url": "http://localhost:3000/",
+        }
+    )
+    alerts.append(
+        {
+            "name": "Content Security Policy (CSP) Header Not Set",
+            "risk": "High",
+            "pluginId": "10038",
+            "url": "http://localhost:3000/critical",
+        }
+    )
+
+    candidates = parse_zap_alerts({"alerts": alerts})
+
+    assert len(candidates) == 2
+    finding = next(candidate for candidate in candidates if candidate.severity == FindingSeverity.MEDIUM)
+    assert finding.title == "[ZAP] Content Security Policy (CSP) Header Not Set"
+    assert "Affected URL count: 113" in finding.evidence_content
+    assert "Evidence Snippet: header-missing-0" in finding.evidence_content
+    assert "page/19" in finding.evidence_content
+    assert "page/20" not in finding.evidence_content
+    assert "Modern Web Application" not in finding.title
+
+
 def test_zap_unreachable_graceful_failure():
     """When ZAP daemon is unreachable, runner raises ConnectionError with clear message."""
     mock_db = MagicMock()
@@ -58,8 +99,9 @@ def test_zap_unreachable_graceful_failure():
     )
     with pytest.raises(ConnectionError) as exc_info:
         runner.check_reachability()
-    assert "OWASP ZAP daemon is not reachable" in str(exc_info.value)
-    assert "daemon/headless mode with the API enabled" in str(exc_info.value)
+    assert "OWASP ZAP daemon" in str(exc_info.value)
+    assert "is unreachable" in str(exc_info.value)
+    assert "ZAP_API_KEY does not match" in str(exc_info.value)
 
 
 def test_zap_active_scan_refused_by_default():
@@ -100,11 +142,21 @@ def test_zap_context_scope_includes_and_excludes():
     assert len(includes) == 1
     assert "http://localhost:3000.*" in includes[0][1]["regex"]
 
-    # Verify exclude calls
+    # Verify explicit out-of-scope and recursive-path exclusions
     excludes = [c for c in requested_calls if "excludeFromContext" in c[0]]
-    assert len(excludes) == 2
+    assert len(excludes) == 3
     assert any("/admin" in c[1]["regex"] for c in excludes)
     assert any("/secret" in c[1]["regex"] for c in excludes)
+    repeated_segment_exclusion = next(
+        c[1]["regex"]
+        for c in excludes
+        if r"([^/?#]+)" in c[1]["regex"] and r"\1" in c[1]["regex"]
+    )
+    assert re.search(
+        repeated_segment_exclusion,
+        "http://localhost:3000/assets/public/assets/public/assets/public/",
+    )
+    assert not re.search(repeated_segment_exclusion, "http://localhost:3000/about")
 
 
 def test_zap_full_execution_workflow_mock():
@@ -159,3 +211,65 @@ def test_zap_full_execution_workflow_mock():
     assert "http://localhost:3000/admin/dashboard" not in spidered
     assert "alerts" in raw_json
 
+
+def test_zap_spider_timeout_is_not_reported_as_success():
+    runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
+    runner._request = MagicMock(
+        side_effect=[
+            {"scan": "101"},
+        ]
+    )
+
+    with pytest.raises(TimeoutError, match="did not complete"):
+        runner.run_spider(
+            target_url="http://localhost:3000",
+            max_duration_mins=0,
+        )
+
+
+def test_zap_spider_caps_depth_urls_and_filters_recursive_paths():
+    runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
+    runner.scope_manager.check_scope = MagicMock(return_value=(True, "OK"))
+    requested_calls = []
+    status_results = iter(({"status": "50"}, {"status": "100"}))
+    urls = [
+        "http://localhost:3000/assets/public/assets/public/assets/public/",
+        "http://localhost:3000/about",
+        "http://localhost:3000/about#section",
+        "http://localhost:3000/api",
+        "http://localhost:3000/contact",
+    ]
+
+    def request(endpoint, params=None):
+        requested_calls.append((endpoint, params))
+        if endpoint == "JSON/spider/action/scan/":
+            return {"scan": "102"}
+        if endpoint == "JSON/spider/view/status/":
+            return next(status_results)
+        if endpoint == "JSON/spider/view/results/":
+            return {"results": urls}
+        return {}
+
+    runner._request = request
+    with patch.object(settings, "ZAP_SPIDER_MAX_URLS", 2), patch(
+        "app.modules.web_assessment.runners.zap_runner.time.sleep"
+    ):
+        spidered = runner.run_spider(
+            target_url="http://localhost:3000",
+            max_depth=100,
+            max_duration_mins=1,
+        )
+
+    scan_params = next(params for endpoint, params in requested_calls if endpoint == "JSON/spider/action/scan/")
+    assert scan_params["maxDepth"] == 5
+    assert scan_params["maxChildren"] == 2
+    assert ("JSON/spider/action/stop/", {"scanId": "102"}) in requested_calls
+    assert spidered == ["http://localhost:3000/about", "http://localhost:3000/api"]
+
+
+def test_zap_passive_scan_timeout_is_visible():
+    runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
+    runner._request = MagicMock(return_value={"recordsToScan": "1"})
+
+    with pytest.raises(TimeoutError, match="did not drain"):
+        runner.wait_for_passive_scan(max_wait_seconds=0)

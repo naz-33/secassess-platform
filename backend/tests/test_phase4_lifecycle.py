@@ -87,8 +87,15 @@ def test_phase4_full_lifecycle_dual_mounts(
     mock_curl = MagicMock()
     mock_curl.stdout = mock_response
     mock_curl.stderr = ""
+    mock_curl.returncode = 0
 
-    with patch("subprocess.run", return_value=mock_curl):
+    with (
+        patch("subprocess.run", return_value=mock_curl),
+        patch(
+            "app.modules.web_assessment.service.TlsRunner.check_tls",
+            return_value={"https_available": False, "raw_output": "TLS probe mocked"},
+        ),
+    ):
         scan_res = unauth_client.post(
             f"/api/v1/assessments/{assessment_id}/web-assessment",
             headers=headers,
@@ -122,6 +129,7 @@ def test_phase4_full_lifecycle_dual_mounts(
     )
     assert upload_res.status_code == 201
     evidence_id = upload_res.json()["id"]
+    assert evidence_id
 
     # 7. Assessor confirms finding under /api/findings/{id}/verify (compat mount)
     verify_res = unauth_client.post(

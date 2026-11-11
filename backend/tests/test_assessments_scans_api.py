@@ -65,6 +65,7 @@ def test_assessments_and_scans_api_lifecycle(client: TestClient):
     mock_proc = MagicMock()
     mock_proc.stdout = xml_content
     mock_proc.stderr = ""
+    mock_proc.returncode = 0
 
     scan_payload = {
         "tool": "nmap",
@@ -125,10 +126,17 @@ def test_assessments_and_scans_api_lifecycle(client: TestClient):
         "tool": "dns",
         "target": "http://localhost:3000",
     }
-    dns_res = client.post(
-        f"/api/v1/assessments/{assessment_id}/scans",
-        json=dns_payload,
-    )
+    with patch(
+        "subprocess.run",
+        side_effect=[
+            MagicMock(stdout="", stderr="", returncode=0)
+            for _ in range(5)
+        ],
+    ):
+        dns_res = client.post(
+            f"/api/v1/assessments/{assessment_id}/scans",
+            json=dns_payload,
+        )
     assert dns_res.status_code == 202
     dns_scan_id = dns_res.json()["id"]
 

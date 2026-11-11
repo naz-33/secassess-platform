@@ -3,7 +3,7 @@ import shutil
 import socket
 import ssl
 import subprocess
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 from app.core.config import settings
 
 
@@ -64,6 +64,17 @@ class TlsRunner:
                 result["is_self_signed"] = True
             if "hostname" in err_msg or "doesn't match" in err_msg:
                 result["hostname_mismatch"] = True
+
+        except ssl.SSLError as ssl_err:
+            if (
+                getattr(ssl_err, "reason", None) == "WRONG_VERSION_NUMBER"
+                or "WRONG_VERSION_NUMBER" in str(ssl_err)
+            ):
+                result["raw_output"] = (
+                    f"HTTPS is unavailable on {host}:{port}: endpoint did not speak TLS."
+                )
+                return result
+            result["raw_output"] += f"TLS probe exception: {ssl_err}\n"
 
         except (socket.timeout, ConnectionRefusedError, socket.gaierror, OSError) as conn_err:
             result["raw_output"] = f"Could not establish TLS connection to {host}:{port}: {conn_err}"

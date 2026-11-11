@@ -124,6 +124,7 @@ def test_scan_runner_success_path_stores_unchanged_raw_output_and_assets(
     mock_proc = MagicMock()
     mock_proc.stdout = xml_content
     mock_proc.stderr = ""
+    mock_proc.returncode = 0
 
     runner = ScanRunner(db_session)
 
@@ -167,7 +168,7 @@ def test_scan_runner_subprocess_timeout(
     target, assessment = target_and_assessment
     runner = ScanRunner(db_session)
 
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["nmap"], timeout=10, output="partial")):
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["nmap"], timeout=10, output=b"partial")):
         scan = runner.run(
             assessment_id=assessment.id,
             tool="nmap",
@@ -177,6 +178,122 @@ def test_scan_runner_subprocess_timeout(
     assert scan.status == ScanStatus.FAILED
     assert "timed out" in (scan.error or "")
     assert scan.raw_output == "partial"
+
+
+def test_scan_runner_nonzero_exit_preserves_partial_nmap_results(
+    db_session: Session,
+    target_and_assessment,
+):
+    target, assessment = target_and_assessment
+    xml_content = (FIXTURES_DIR / "nmap_open_ports.xml").read_text(encoding="utf-8")
+    mock_proc = MagicMock(stdout=xml_content, stderr="scan interrupted", returncode=1)
+
+    with patch("subprocess.run", return_value=mock_proc):
+        scan = ScanRunner(db_session).run(
+            assessment_id=assessment.id,
+            tool="nmap",
+            target="http://localhost:3000",
+        )
+
+    assert scan.status == ScanStatus.FAILED
+    assert "status 1" in (scan.error or "")
+    assert "scan interrupted" in (scan.raw_output or "")
+    assert len(ReconService(db_session).list_assets(assessment.id, scan_id=scan.id)) >= 4
+
+
+def test_scan_runner_repeat_scans_deduplicate_assets_and_preserve_provenance(
+    db_session: Session,
+    target_and_assessment,
+):
+    _, assessment = target_and_assessment
+    xml_content = (FIXTURES_DIR / "nmap_open_ports.xml").read_text(encoding="utf-8")
+    mock_proc = MagicMock(stdout=xml_content, stderr="", returncode=0)
+    runner = ScanRunner(db_session)
+
+    with patch("subprocess.run", return_value=mock_proc):
+        first = runner.run(
+            assessment_id=assessment.id,
+            tool="nmap",
+            target="http://localhost:3000",
+        )
+        second = runner.run(
+            assessment_id=assessment.id,
+            tool="nmap",
+            target="http://localhost:3000",
+        )
+
+    recon = ReconService(db_session)
+    all_assets = recon.list_assets(assessment.id)
+    first_assets = recon.list_assets(assessment.id, scan_id=first.id)
+    second_assets = recon.list_assets(assessment.id, scan_id=second.id)
+
+    assert first.status == second.status == ScanStatus.COMPLETED
+    assert len(all_assets) == len(first_assets) == len(second_assets) == 5
+    assert all(set(asset.scan_ids) == {first.id, second.id} for asset in all_assets)
+
+
+def test_dns_rediscovers_existing_asset_and_preserves_scan_association(
+    db_session: Session,
+    target_and_assessment,
+):
+    _, assessment = target_and_assessment
+    nmap_xml = (FIXTURES_DIR / "nmap_open_ports.xml").read_text(encoding="utf-8")
+    nmap_xml = nmap_xml.replace("192.168.1.50", "93.184.216.34")
+    dig_output = (FIXTURES_DIR / "dig_sample.txt").read_text(encoding="utf-8")
+    runner = ScanRunner(db_session)
+
+    with patch(
+        "subprocess.run",
+        return_value=MagicMock(stdout=nmap_xml, stderr="", returncode=0),
+    ):
+        nmap_scan = runner.run(
+            assessment_id=assessment.id,
+            tool="nmap",
+            target="http://localhost:3000",
+        )
+
+    with patch(
+        "subprocess.run",
+        side_effect=[
+            MagicMock(stdout=dig_output, stderr="", returncode=0)
+            for _ in range(5)
+        ],
+    ):
+        dns_scan = runner.run(
+            assessment_id=assessment.id,
+            tool="dns",
+            target="http://localhost:3000",
+        )
+
+    host = next(
+        asset
+        for asset in ReconService(db_session).list_assets(assessment.id)
+        if asset.type.value == "host" and asset.value == "93.184.216.34"
+    )
+    assert nmap_scan.status == dns_scan.status == ScanStatus.COMPLETED
+    assert set(host.scan_ids) == {nmap_scan.id, dns_scan.id}
+
+
+def test_scan_runner_dns_nonzero_exit_is_failed(
+    db_session: Session,
+    target_and_assessment,
+):
+    _, assessment = target_and_assessment
+    mock_results = [
+        MagicMock(stdout="", stderr="DNS query failed", returncode=2)
+        for _ in range(5)
+    ]
+
+    with patch("subprocess.run", side_effect=mock_results):
+        scan = ScanRunner(db_session).run(
+            assessment_id=assessment.id,
+            tool="dns",
+            target="http://localhost:3000",
+        )
+
+    assert scan.status == ScanStatus.FAILED
+    assert "exited with status 2" in (scan.error or "")
+    assert "DNS query failed" in (scan.raw_output or "")
 
 
 def test_scan_runner_missing_executable_graceful_failure(
@@ -206,11 +323,18 @@ def test_scan_runner_dns_localhost_mode_completes(
     target, assessment = target_and_assessment
     runner = ScanRunner(db_session)
 
-    scan = runner.run(
-        assessment_id=assessment.id,
-        tool="dns",
-        target="http://localhost:3000",
-    )
+    with patch(
+        "subprocess.run",
+        side_effect=[
+            MagicMock(stdout="", stderr="", returncode=0)
+            for _ in range(5)
+        ],
+    ):
+        scan = runner.run(
+            assessment_id=assessment.id,
+            tool="dns",
+            target="http://localhost:3000",
+        )
 
     assert scan.status == ScanStatus.COMPLETED
     assert "$ dig localhost A +noall +answer" in (scan.raw_output or "")

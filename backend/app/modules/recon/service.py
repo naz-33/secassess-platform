@@ -40,7 +40,7 @@ class ReconService:
                 )
             )
 
-        created = self.repository.bulk_create(asset_objs)
+        created = self.repository.bulk_upsert_discovered(asset_objs)
         return [AssetRead.model_validate(a) for a in created]
 
     def list_assets(
@@ -69,4 +69,3 @@ class ReconService:
     def get_asset_summary(self, assessment_id: uuid.UUID) -> Dict[str, Any]:
         """Return aggregated asset counts by type and open ports/services."""
         return self.repository.get_summary(assessment_id)
-

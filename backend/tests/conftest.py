@@ -2,6 +2,7 @@ import sys
 import os
 import uuid
 import pytest
+from urllib.parse import unquote, urlsplit
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -9,6 +10,26 @@ from sqlalchemy import select
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+# Never let tests inherit the application's configured database implicitly.
+_test_database_url = os.environ.get("TEST_DATABASE_URL", "").strip()
+if not _test_database_url:
+    raise RuntimeError(
+        "TEST_DATABASE_URL must point to a dedicated test database before running backend tests."
+    )
+
+_test_database_parts = urlsplit(_test_database_url)
+if _test_database_parts.scheme not in {"postgresql", "postgresql+psycopg"}:
+    raise RuntimeError("TEST_DATABASE_URL must use the PostgreSQL driver configured for this project.")
+
+_test_database = unquote(_test_database_parts.path.lstrip("/")).lower()
+if not _test_database or "test" not in _test_database:
+    raise RuntimeError("TEST_DATABASE_URL must use a database name containing 'test'.")
+
+os.environ["DATABASE_URL"] = _test_database_url
+os.environ["AI_ENABLED"] = "false"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
 
 from app.main import app
 from app.core.database import SessionLocal

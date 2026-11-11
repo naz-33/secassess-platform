@@ -49,3 +49,4 @@ class CandidateFinding:
     remediation: Optional[str] = None
     evidence_label: Optional[str] = None
     evidence_content: Optional[str] = None
+    affected_urls: List[str] = field(default_factory=list)

@@ -15,7 +15,11 @@ class WebAssessmentRequest(BaseModel):
     )
     zap_options: Optional[Dict[str, Any]] = Field(
         default_factory=dict,
-        description="Allow-listed ZAP options: spider_max_depth, spider_duration_mins, run_active_scan.",
+        description=(
+            "Allow-listed ZAP options: spider_max_depth (hard-capped at 5), "
+            "spider_duration_mins, and run_active_scan. The spider URL count uses "
+            "ZAP_SPIDER_MAX_URLS and is hard-capped at 500."
+        ),
     )
     options: Optional[Dict[str, Any]] = Field(
         default_factory=dict,

@@ -1,7 +1,10 @@
+import ssl
 from pathlib import Path
+from unittest.mock import patch
 from app.modules.findings import FindingSeverity
 from app.modules.web_assessment.types import CapturedResponse
 from app.modules.web_assessment.runners.curl_runner import parse_raw_curl_response
+from app.modules.web_assessment.runners.tls_runner import TlsRunner
 from app.modules.web_assessment.checks.security_headers import (
     check_security_headers,
     check_cors_configuration,
@@ -22,7 +25,6 @@ from app.modules.web_assessment.checks.information_disclosure import (
 from app.modules.web_assessment.checks.session_management import (
     check_cookie_attributes,
     mask_cookie_value,
-    parse_set_cookie,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -122,6 +124,21 @@ def test_cors_wildcard_credentials_and_reflection():
     assert "Arbitrary CORS Origin Reflection" in f2[0].title
 
 
+def test_cors_wildcard_without_credentials_is_low_finding_with_header_evidence():
+    response = CapturedResponse(
+        url="http://example.com/",
+        method="GET",
+        status=200,
+        headers=[("Access-Control-Allow-Origin", "*")],
+    )
+
+    findings = check_cors_configuration(response)
+
+    assert len(findings) == 1
+    assert findings[0].severity == FindingSeverity.LOW
+    assert findings[0].evidence_content == "Access-Control-Allow-Origin: *"
+
+
 def test_plain_http_target_and_redirect():
     """Test findings generated when target is plain HTTP and when redirect is missing."""
     f_plain = check_plain_http_target("http://insecure.local", https_available=False)
@@ -181,6 +198,29 @@ def test_cookie_attributes_variants():
     assert any("Insecure SameSite=None" in t for t in titles)
     assert any("Excessive Expiration" in t for t in titles)
     assert any("Weak or Predictable Session Identifier" in t for t in titles)
+    session_finding = next(f for f in findings if "Cookie Missing HttpOnly" in f.title)
+    assert session_finding.evidence_content == "Set-Cookie: session=12345; Path=/"
+
+
+def test_session_findings_require_real_set_cookie_evidence():
+    response_without_cookie = CapturedResponse(
+        url="https://example.com/",
+        method="GET",
+        status=200,
+        headers=[("Content-Type", "text/html")],
+    )
+    assert check_cookie_attributes(response_without_cookie) == []
+
+    raw_cookie = "session=observed-value; Path=/; SameSite=Lax"
+    response_with_cookie = CapturedResponse(
+        url="https://example.com/",
+        method="GET",
+        status=200,
+        headers=[("Set-Cookie", raw_cookie)],
+    )
+    findings = check_cookie_attributes(response_with_cookie)
+    assert findings
+    assert all(f.evidence_content == f"Set-Cookie: {raw_cookie}" for f in findings)
 
 
 def test_cookie_masking_helper():
@@ -222,6 +262,86 @@ def test_exposed_files_soft_404_baseline():
     assert len(findings_real_git) == 1
     assert "Exposed Git Repository Metadata" in findings_real_git[0].title
     assert findings_real_git[0].severity == FindingSeverity.HIGH
+
+
+def test_juiceshop_identical_200_unknown_path_is_soft_404():
+    raw_juiceshop = (FIXTURES_DIR / "juiceshop_response.txt").read_text(encoding="utf-8")
+    baseline = parse_raw_curl_response(
+        raw_juiceshop,
+        url="http://localhost:3000/",
+        method="GET",
+        elapsed_ms=1,
+    )
+    unknown_path = parse_raw_curl_response(
+        raw_juiceshop,
+        url="http://localhost:3000/definitely-not-a-real-juice-shop-path",
+        method="GET",
+        elapsed_ms=1,
+    )
+
+    assert baseline.status == unknown_path.status == 200
+    assert baseline.get_header("Content-Length") == unknown_path.get_header("Content-Length")
+    assert baseline.body == unknown_path.body
+    assert check_exposed_file(unknown_path, baseline) == []
+
+
+def test_juiceshop_ftp_directory_listing_is_detected():
+    raw_listing = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "Content-Length: 11331\r\n\r\n"
+        "<!doctype html><html><head><title>listing directory /ftp</title></head>"
+        "<body><h1>listing directory /ftp</h1><a href=\"/ftp/1.txt\">1.txt</a>"
+        "</body></html>"
+    )
+    listing = parse_raw_curl_response(
+        raw_listing,
+        url="http://localhost:3000/ftp",
+        method="GET",
+        elapsed_ms=1,
+        response_truncated=True,
+    )
+    baseline = CapturedResponse(
+        url="http://localhost:3000/",
+        method="GET",
+        status=200,
+        body="<html><title>OWASP Juice Shop</title></html>",
+    )
+
+    findings = check_exposed_file(listing, baseline)
+
+    assert listing.truncated is True
+    assert len(findings) == 1
+    assert "Directory Listing Enabled" in findings[0].title
+
+
+def test_tls_wrong_version_on_http_service_means_https_unavailable():
+    class SocketStub:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class SslContextStub:
+        def wrap_socket(self, _sock, server_hostname):
+            assert server_hostname == "juice-shop"
+            raise ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number")
+
+    with (
+        patch(
+            "app.modules.web_assessment.runners.tls_runner.ssl.create_default_context",
+            return_value=SslContextStub(),
+        ),
+        patch(
+            "app.modules.web_assessment.runners.tls_runner.socket.create_connection",
+            return_value=SocketStub(),
+        ),
+    ):
+        result = TlsRunner().check_tls("juice-shop", port=3000)
+
+    assert result["https_available"] is False
+    assert "HTTPS is unavailable" in result["raw_output"]
 
 
 def test_exposed_env_and_directory_listing():
@@ -291,4 +411,3 @@ def test_information_disclosure_signatures():
     f_comm = check_sensitive_content(comment_resp)
     assert len(f_comm) == 1
     assert "Sensitive Developer Comments" in f_comm[0].title
-

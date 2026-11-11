@@ -62,6 +62,23 @@ def test_nmap_parser_malformed_xml():
         parser.parse(xml_content)
 
 
+def test_nmap_parser_prefers_http_for_table_guess_on_tcp_3000():
+    xml_content = (FIXTURES_DIR / "nmap_open_ports.xml").read_text(encoding="utf-8")
+    xml_content = (
+        xml_content.replace('portid="80"', 'portid="3000"')
+        .replace(
+            '<service name="http" product="nginx" version="1.18.0" extrainfo="Ubuntu" method="probed"/>',
+            '<service name="hbci" method="table"/>',
+        )
+    )
+
+    assets = NmapParser().parse(xml_content)
+    service = next(asset for asset in assets if asset["type"] == "service" and asset["value"].endswith(":3000"))
+
+    assert service["value"] == "http:3000"
+    assert service["details"]["name"] == "http"
+
+
 def test_dns_parser_dig_records():
     """Verify DNS parser extracts records into host and service asset dicts."""
     dig_content = (FIXTURES_DIR / "dig_sample.txt").read_text(encoding="utf-8")
@@ -94,4 +111,3 @@ def test_dns_parser_localhost_mode():
     notice = "No DNS records for this target type (localhost or IP address)."
     assets = parser.parse(notice)
     assert assets == []
-

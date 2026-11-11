@@ -98,6 +98,14 @@ class NmapParser:
                         product = service_elem.get("product", "")
                         version = service_elem.get("version", "")
                         extrainfo = service_elem.get("extrainfo", "")
+                        service_method = service_elem.get("method", "")
+
+                        if (
+                            protocol.lower() == "tcp"
+                            and port_num == 3000
+                            and service_method == "table"
+                        ):
+                            srv_name = "http"
 
                         assets.append({
                             "type": "service",

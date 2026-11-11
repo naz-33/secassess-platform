@@ -8,12 +8,14 @@ from app.modules.targets.scope_manager import (
     validate_scope,
 )
 from app.core.database import SessionLocal
+from app.modules.targets import TargetService
+from app.modules.targets.schemas import ScopeItemCreate, TargetCreate
 
 
 def test_is_asset_in_scope_base_url():
     """Verify base_url matching including localhost and loopback variations."""
     base_url = "http://localhost:3000"
-    
+
     # Authorized assets
     ok, _ = is_asset_in_scope("http://localhost:3000", base_url)
     assert ok is True
@@ -123,11 +125,18 @@ def test_scope_manager_db_enforcement():
     db = SessionLocal()
     try:
         manager = ScopeManager(db)
-        
-        # Query existing seeded target
-        from app.modules.targets.models import Target
-        target = db.query(Target).filter(Target.name == "OWASP Juice Shop").first()
-        assert target is not None, "Seeded target 'OWASP Juice Shop' should exist"
+        target = TargetService(db).create_target(
+            TargetCreate(
+                name=f"Scope Manager Target {uuid.uuid4().hex[:8]}",
+                base_url="http://juice-shop:3000",
+                scope_items=[
+                    ScopeItemCreate(
+                        asset="http://juice-shop:3000",
+                        in_scope=True,
+                    )
+                ],
+            )
+        )
 
         # Valid in-scope asset
         assert manager.assert_in_scope(target.id, "http://juice-shop:3000") is True
@@ -142,4 +151,3 @@ def test_scope_manager_db_enforcement():
             manager.assert_in_scope(uuid.uuid4(), "http://localhost:3000")
     finally:
         db.close()
-
