@@ -33,7 +33,10 @@ def _get_genai_client() -> genai.Client:
     if not settings.AI_ENABLED or not settings.GEMINI_API_KEY or not settings.GEMINI_API_KEY.strip():
         raise ServiceUnavailableException("AI features are disabled or GEMINI_API_KEY is not configured.")
 
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
+    return genai.Client(
+        api_key=settings.GEMINI_API_KEY,
+        http_options=types.HttpOptions(timeout=settings.AI_TIMEOUT_SECONDS * 1000),
+    )
 
 
 def call_gemini_api(
@@ -75,7 +78,7 @@ def call_gemini_api(
         max_output_tokens=settings.AI_MAX_OUTPUT_TOKENS,
     )
 
-    max_retries = max(0, settings.AI_MAX_RETRIES)
+    max_retries = min(2, max(0, settings.AI_MAX_RETRIES))
     attempt = 0
     start_time = time.perf_counter()
 
@@ -139,17 +142,13 @@ def call_gemini_api(
                     settings.GEMINI_API_KEY, "[REDACTED_API_KEY]"
                 )
             logger.warning("Gemini API error (code=%s): %s", status_code, provider_message)
-            if status_code == 429:
+            if status_code in (429, 503):
                 if attempt < max_retries:
                     time.sleep(0.5 * (2 ** attempt))
                     attempt += 1
                     continue
-                raise RateLimitException("Gemini API rate limit or quota exceeded.")
-            elif status_code and 500 <= status_code < 600:
-                if attempt < max_retries:
-                    time.sleep(0.5 * (2 ** attempt))
-                    attempt += 1
-                    continue
+                if status_code == 429:
+                    raise RateLimitException("Gemini API rate limit or quota exceeded.")
                 raise BadGatewayException(f"Gemini API upstream error ({status_code}).")
             else:
                 raise BadGatewayException(f"Gemini API error: {provider_message}")
@@ -160,11 +159,7 @@ def call_gemini_api(
             safe_message = str(exc)
             if settings.GEMINI_API_KEY:
                 safe_message = safe_message.replace(settings.GEMINI_API_KEY, "[REDACTED_API_KEY]")
-            if any(term in err_str for term in ("timeout", "timed out", "connection", "retry")):
-                if attempt < max_retries:
-                    time.sleep(0.5 * (2 ** attempt))
-                    attempt += 1
-                    continue
+            if any(term in err_str for term in ("timeout", "timed out", "connection")):
                 raise BadGatewayException(f"Gemini request timed out: {safe_message}")
             raise
 

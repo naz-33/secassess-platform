@@ -65,6 +65,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       AI_ENABLED: ${AI_ENABLED:-true}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-30}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@secassess.local}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-AdminSecurePassword123!}
       SEED_ASSESSOR_EMAIL: ${SEED_ASSESSOR_EMAIL:-assessor@secassess.local}

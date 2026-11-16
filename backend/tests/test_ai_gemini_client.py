@@ -73,7 +73,7 @@ def test_missing_api_key_or_disabled_raises_service_unavailable(monkeypatch):
 
 @patch("app.modules.ai_analysis.gemini_client._get_genai_client")
 def test_transient_rate_limit_and_retry(mock_get_client, monkeypatch):
-    """Test 429 transient rate-limit retries up to max_retries with backoff."""
+    """Test 429 rate-limit retries up to the configured attempt limit."""
     monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_mock_api_key")
     monkeypatch.setattr(settings, "AI_MAX_RETRIES", 1)
@@ -96,6 +96,78 @@ def test_transient_rate_limit_and_retry(mock_get_client, monkeypatch):
         )
 
     assert mock_client.models.generate_content.call_count == 2
+
+
+@patch("app.modules.ai_analysis.gemini_client.time.sleep")
+@patch("app.modules.ai_analysis.gemini_client._get_genai_client")
+def test_service_unavailable_retries_then_succeeds(
+    mock_get_client, mock_sleep, monkeypatch
+):
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_mock_api_key")
+    monkeypatch.setattr(settings, "AI_MAX_RETRIES", 8)
+
+    from google.genai.errors import APIError
+
+    mock_client = MagicMock()
+    unavailable = APIError(code=503, response_json={"error": "Unavailable"})
+    unavailable.message = "Unavailable"
+    success = SimpleNamespace(
+        candidates=[SimpleNamespace(finish_reason="STOP")],
+        text="{}",
+        usage_metadata=None,
+    )
+    mock_client.models.generate_content.side_effect = [unavailable, unavailable, success]
+    mock_get_client.return_value = mock_client
+
+    with patch(
+        "app.modules.ai_analysis.gemini_client._validate_or_repair_response",
+        return_value=(None, {}),
+    ):
+        call_gemini_api(
+            redacted_prompt=redact_text("synthetic prompt"),
+            system_instruction="sys",
+            response_schema=ScanInterpretationResponse,
+        )
+
+    assert mock_client.models.generate_content.call_count == 3
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [0.5, 1.0]
+
+
+@patch("app.modules.ai_analysis.gemini_client._get_genai_client")
+def test_other_server_errors_are_not_retried(mock_get_client, monkeypatch):
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_mock_api_key")
+    monkeypatch.setattr(settings, "AI_MAX_RETRIES", 2)
+
+    from google.genai.errors import APIError
+
+    mock_client = MagicMock()
+    err = APIError(code=500, response_json={"error": "Internal error"})
+    err.message = "Internal error"
+    mock_client.models.generate_content.side_effect = err
+    mock_get_client.return_value = mock_client
+
+    with pytest.raises(BadGatewayException, match="Gemini API error"):
+        call_gemini_api(
+            redacted_prompt=redact_text("synthetic prompt"),
+            system_instruction="sys",
+            response_schema=ScanInterpretationResponse,
+        )
+
+    assert mock_client.models.generate_content.call_count == 1
+
+
+def test_client_timeout_uses_settings(monkeypatch):
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "test_mock_api_key")
+    monkeypatch.setattr(settings, "AI_TIMEOUT_SECONDS", 17)
+
+    with patch("app.modules.ai_analysis.gemini_client.genai.Client") as mock_client:
+        gemini_client._get_genai_client()
+
+    options = mock_client.call_args.kwargs["http_options"]
+    assert options.timeout == 17_000
 
 
 @patch("app.modules.ai_analysis.gemini_client._get_genai_client")
