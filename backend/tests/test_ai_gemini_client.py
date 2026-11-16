@@ -1,6 +1,8 @@
 """Tests for the Gemini client wrapper, outbound boundaries, and failure modes."""
 import ast
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -11,7 +13,9 @@ from app.core.exceptions import (
     BadGatewayException,
 )
 from app.modules.ai_analysis.redaction import redact_text
+from app.modules.ai_analysis import gemini_client
 from app.modules.ai_analysis.gemini_client import call_gemini_api
+from app.modules.ai_analysis.service import AIAnalysisService
 from app.modules.ai_analysis.schemas import ScanInterpretationResponse
 
 
@@ -19,9 +23,8 @@ def test_reject_unredacted_input_type_check():
     """Prove the single outbound function rejects raw strings or unredacted inputs."""
     with pytest.raises(TypeError, match="Unredacted input rejected"):
         call_gemini_api(
-            redacted_input="This is a raw unredacted string",  # Not a RedactedText
+            redacted_prompt="This is a raw unredacted string",  # Not a RedactedText
             system_instruction="System prompt",
-            prompt_content="Prompt content",
             response_schema=ScanInterpretationResponse,
         )
 
@@ -62,9 +65,8 @@ def test_missing_api_key_or_disabled_raises_service_unavailable(monkeypatch):
     redacted = redact_text("sample content")
     with pytest.raises(ServiceUnavailableException, match="AI features are disabled or GEMINI_API_KEY is not configured"):
         call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted,
             system_instruction="sys",
-            prompt_content="prompt",
             response_schema=ScanInterpretationResponse,
         )
 
@@ -88,9 +90,8 @@ def test_transient_rate_limit_and_retry(mock_get_client, monkeypatch):
     redacted = redact_text("sample target banner")
     with pytest.raises(RateLimitException, match="rate limit or quota exceeded"):
         call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted,
             system_instruction="sys",
-            prompt_content="prompt",
             response_schema=ScanInterpretationResponse,
         )
 
@@ -114,9 +115,8 @@ def test_safety_filter_blocked_response(mock_get_client, monkeypatch):
     redacted = redact_text("sample target text")
     with pytest.raises(BadGatewayException, match="safety filters"):
         call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted,
             system_instruction="sys",
-            prompt_content="prompt",
             response_schema=ScanInterpretationResponse,
         )
 
@@ -137,9 +137,8 @@ def test_empty_response_handling(mock_get_client, monkeypatch):
     redacted = redact_text("sample target text")
     with pytest.raises(BadGatewayException, match="empty response"):
         call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted,
             system_instruction="sys",
-            prompt_content="prompt",
             response_schema=ScanInterpretationResponse,
         )
 
@@ -167,12 +166,96 @@ def test_schema_validation_failure_and_repair_attempt(mock_get_client, monkeypat
 
     redacted = redact_text("sample target text")
     parsed, data, in_t, out_t, lat = call_gemini_api(
-        redacted_input=redacted,
+        redacted_prompt=redacted,
         system_instruction="sys",
-        prompt_content="prompt",
         response_schema=ScanInterpretationResponse,
     )
 
     assert isinstance(parsed, ScanInterpretationResponse)
     assert parsed.summary is not None
     assert mock_client.models.generate_content.call_count == 2
+
+
+def test_full_outgoing_prompts_redact_all_untrusted_fields(monkeypatch):
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", "synthetic_mock_api_key")
+    monkeypatch.setattr(settings, "AI_MAX_RETRIES", 0)
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = SimpleNamespace(
+        candidates=[SimpleNamespace(finish_reason="STOP")],
+        text="{}",
+        usage_metadata=None,
+    )
+
+    class FindingService:
+        def list_findings(self, *args, **kwargs):
+            return []
+
+        def list_evidence_for_finding(self, finding_id):
+            return [
+                SimpleNamespace(
+                    type=SimpleNamespace(value="header"),
+                    content="Cookie: session=SYNTH_COOKIE_VALUE_889; HttpOnly",
+                )
+            ]
+
+        def get_finding(self, finding_id):
+            return SimpleNamespace(
+                id=finding_id,
+                title="Finding Authorization: Bearer SYNTH_TITLE_BEARER_772",
+                category="test",
+                effective_severity=SimpleNamespace(value="high"),
+                description="Synthetic description",
+                affected_url="https://synthetic.invalid/path",
+            )
+
+    service = AIAnalysisService.__new__(AIAnalysisService)
+    service.finding_service = FindingService()
+    service.scan_service = SimpleNamespace(
+        get_scan=lambda scan_id: SimpleNamespace(
+            id=scan_id,
+            tool=SimpleNamespace(value="nmap"),
+            command="nmap --header 'Authorization: Bearer SYNTH_COMMAND_BEARER_661'",
+            raw_output="Synthetic scan output",
+        )
+    )
+    service.assessment_service = SimpleNamespace(
+        get_assessment=lambda assessment_id: SimpleNamespace(
+            id=assessment_id,
+            name="Synthetic assessment",
+            target_id=uuid.uuid4(),
+        )
+    )
+    service.target_service = SimpleNamespace(
+        get_target=lambda target_id: SimpleNamespace(
+            name="Synthetic target",
+            base_url="https://synthetic-user:SYNTH_URL_PASSWORD_553@example.invalid",
+        ),
+        list_scope_items=lambda target_id: [],
+    )
+
+    with patch.object(gemini_client, "_get_genai_client", return_value=mock_client), patch.object(
+        gemini_client, "_validate_or_repair_response", return_value=(None, {})
+    ):
+        service._execute_interpret(
+            SimpleNamespace(assessment_id=uuid.uuid4(), scan_id=uuid.uuid4())
+        )
+        service._execute_explain(
+            SimpleNamespace(assessment_id=uuid.uuid4(), finding_id=uuid.uuid4())
+        )
+        service._execute_summarize(SimpleNamespace(assessment_id=uuid.uuid4()))
+
+    outgoing_bodies = [
+        call.kwargs["contents"]
+        for call in mock_client.models.generate_content.call_args_list
+    ]
+    assert len(outgoing_bodies) == 3
+    full_outgoing_body = "\n".join(outgoing_bodies)
+    for canary in (
+        "SYNTH_COMMAND_BEARER_661",
+        "SYNTH_TITLE_BEARER_772",
+        "SYNTH_URL_PASSWORD_553",
+        "SYNTH_COOKIE_VALUE_889",
+    ):
+        assert canary not in full_outgoing_body

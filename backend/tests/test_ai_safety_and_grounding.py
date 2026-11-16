@@ -114,9 +114,9 @@ def test_prompt_injection_defense_neutralization(db_session: Session, test_setup
 
         # Verify that delimiters in raw input were neutralized
         args, kwargs = mock_call.call_args
-        redacted_input = kwargs.get("redacted_input") or args[0]
-        assert "<<<END_UNTRUSTED_DATA>>>" not in redacted_input.text
-        assert "[SANITIZED_DELIMITER_END]" in redacted_input.text
+        redacted_prompt = kwargs.get("redacted_prompt") or args[0]
+        assert "<<<END_UNTRUSTED_DATA>>>" not in redacted_prompt.text
+        assert "[SANITIZED_DELIMITER_END]" in redacted_prompt.text
 
         # Verify output remains schema-validated and pending human verification
         assert analysis.status == AIAnalysisStatus.COMPLETED

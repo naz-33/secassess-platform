@@ -613,14 +613,21 @@ class AIAnalysisService:
         if analysis.edited_text and analysis.edited_text.strip():
             summary_text = analysis.edited_text.strip()
         elif analysis.response_json and isinstance(analysis.response_json, dict):
-            summary_text = analysis.response_json.get("summary_text", "")
+            summary_text = (
+                analysis.response_json.get("executive_summary")
+                or analysis.response_json.get("summary_text", "")
+            )
 
+        response_json = analysis.response_json if isinstance(analysis.response_json, dict) else {}
         return {
             "id": analysis.id,
             "model": analysis.model,
             "prompt_version": analysis.prompt_version,
             "summary_text": summary_text,
-            "original_text": analysis.response_json.get("summary_text", "") if (analysis.response_json and isinstance(analysis.response_json, dict)) else "",
+            "original_text": (
+                response_json.get("executive_summary")
+                or response_json.get("summary_text", "")
+            ),
             "is_edited": bool(analysis.edited_text and analysis.edited_text.strip()),
             "reviewed_by": analysis.reviewed_by,
             "reviewed_at": analysis.reviewed_at,
@@ -701,29 +708,27 @@ class AIAnalysisService:
             for e in evs:
                 valid_evidence_ids.add(str(e.id))
 
-        redacted = redact_scan_output(
-            raw_output,
-            max_chars=settings.AI_MAX_INPUT_CHARS,
-            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
-        )
-
         prompt_body = template.format(
             assessment_id=analysis.assessment_id,
             scan_id=scan.id,
             scan_tool=scan.tool.value,
             scan_target=scan.command or "Target",
-            scan_data=redacted.text,
+            scan_data=raw_output,
+        )
+        redacted_prompt = redact_text(
+            prompt_body,
+            max_chars=settings.AI_MAX_INPUT_CHARS,
+            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
         )
 
         parsed, response_dict, in_tok, out_tok, lat = call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted_prompt,
             system_instruction=(
                 "You are a security analyst. Base every claim only on the supplied scan output; "
                 "do not invent evidence and state when evidence is insufficient. Juice Shop may "
                 "return the same HTTP 200 single-page index for unknown paths, so an HTTP 200 "
                 "alone is not evidence of an exposed file."
             ),
-            prompt_content=prompt_body,
             response_schema=ScanInterpretationResponse,
         )
 
@@ -748,22 +753,20 @@ class AIAnalysisService:
                 f"  URL: {f.affected_url or 'N/A'}\n  Description: {f.description[:300]}"
             )
         raw_text = "\n".join(findings_snippets) or "No findings recorded."
-        redacted = redact_text(
-            raw_text,
+        prompt_body = template.format(
+            assessment_id=analysis.assessment_id,
+            total_findings=len(findings),
+            findings_data=raw_text,
+        )
+        redacted_prompt = redact_text(
+            prompt_body,
             max_chars=settings.AI_MAX_INPUT_CHARS,
             redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
         )
 
-        prompt_body = template.format(
-            assessment_id=analysis.assessment_id,
-            total_findings=len(findings),
-            findings_data=redacted.text,
-        )
-
         parsed, response_dict, in_tok, out_tok, lat = call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted_prompt,
             system_instruction="You are an expert security assessor prioritizing discovered vulnerabilities.",
-            prompt_content=prompt_body,
             response_schema=PrioritizationResponse,
         )
 
@@ -782,31 +785,29 @@ class AIAnalysisService:
             raise NotFoundException("Finding", analysis.finding_id)
 
         evidences = self.finding_service.list_evidence_for_finding(finding.id)
-        ev_snippets = [f"Evidence [{e.type.value}]: {(e.content or '')[:800]}" for e in evidences]
+        ev_snippets = [f"Evidence [{e.type.value}]:\n{(e.content or '')[:800]}" for e in evidences]
 
         raw_context = (
             f"Title: {finding.title}\nCategory: {finding.category}\nSeverity: {finding.effective_severity.value}\n"
             f"Description: {finding.description}\nURL: {finding.affected_url or 'N/A'}\n"
             f"Evidence:\n" + "\n".join(ev_snippets)
         )
-        redacted = redact_text(
-            raw_context,
-            max_chars=settings.AI_MAX_INPUT_CHARS,
-            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
-        )
-
         prompt_body = template.format(
             finding_id=finding.id,
             finding_title=finding.title,
             finding_category=finding.category,
             finding_severity=finding.effective_severity.value,
-            finding_data=redacted.text,
+            finding_data=raw_context,
+        )
+        redacted_prompt = redact_text(
+            prompt_body,
+            max_chars=settings.AI_MAX_INPUT_CHARS,
+            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
         )
 
         parsed, response_dict, in_tok, out_tok, lat = call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted_prompt,
             system_instruction="You are a principal security researcher giving actionable remediation advice.",
-            prompt_content=prompt_body,
             response_schema=FindingExplanationResponse,
         )
 
@@ -849,12 +850,6 @@ class AIAnalysisService:
             f"Unverified Findings Count: {unverified_count}\n"
             f"Confirmed Details:\n{confirmed_block}"
         )
-        redacted = redact_text(
-            raw_context,
-            max_chars=settings.AI_MAX_INPUT_CHARS,
-            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
-        )
-
         prompt_body = template.format(
             assessment_id=assessment.id,
             assessment_name=assessment.name,
@@ -864,13 +859,17 @@ class AIAnalysisService:
             confirmed_count=len(confirmed_findings),
             unverified_count=unverified_count,
             false_positive_count=false_positive_count,
-            confirmed_findings_data=redacted.text,
+            confirmed_findings_data=raw_context,
+        )
+        redacted_prompt = redact_text(
+            prompt_body,
+            max_chars=settings.AI_MAX_INPUT_CHARS,
+            redact_internal_ips=settings.AI_REDACT_INTERNAL_IPS,
         )
 
         parsed, response_dict, in_tok, out_tok, lat = call_gemini_api(
-            redacted_input=redacted,
+            redacted_prompt=redacted_prompt,
             system_instruction="You are a Principal Security Auditor drafting an executive summary based ONLY on confirmed findings.",
-            prompt_content=prompt_body,
             response_schema=ExecutiveSummaryResponse,
         )
 

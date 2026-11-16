@@ -37,32 +37,31 @@ def _get_genai_client() -> genai.Client:
 
 
 def call_gemini_api(
-    redacted_input: RedactedText,
+    redacted_prompt: RedactedText,
     system_instruction: str,
-    prompt_content: str,
     response_schema: Type[T],
 ) -> Tuple[T, Dict[str, Any], int, int, int]:
     """
     Sole sanctioned outbound function executing inference via the Google Gemini API.
 
     Safety Guarantee:
-        Strictly enforces that dynamic prompt content is encapsulated in a RedactedText
+        Strictly enforces that the complete prompt is encapsulated in a RedactedText
         wrapper. Passing an unredacted string or arbitrary type raises TypeError.
 
     Returns:
         Tuple of (parsed_pydantic_model, response_dict, input_tokens, output_tokens, latency_ms)
 
     Raises:
-        TypeError: If redacted_input is not an instance of RedactedText.
+        TypeError: If redacted_prompt is not an instance of RedactedText.
         ServiceUnavailableException: If AI is disabled or API key missing.
         RateLimitException: If 429 quota or rate limits are reached.
         BadGatewayException: On safety filter blocks, provider errors, or empty responses.
         UnprocessableEntityException: If the response fails schema validation after repair attempt.
     """
     # 1. Strict type check: Enforce RedactedText boundary
-    if not isinstance(redacted_input, RedactedText):
+    if not isinstance(redacted_prompt, RedactedText):
         raise TypeError(
-            "Unredacted input rejected: Dynamic prompt context must be passed as a RedactedText instance."
+            "Unredacted input rejected: The complete prompt must be passed as a RedactedText instance."
         )
 
     client = _get_genai_client()
@@ -91,7 +90,7 @@ def call_gemini_api(
 
             response = client.models.generate_content(
                 model=settings.GEMINI_MODEL,
-                contents=prompt_content,
+                contents=redacted_prompt.text,
                 config=config,
             )
 

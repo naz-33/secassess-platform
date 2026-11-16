@@ -447,6 +447,40 @@ def test_ai_summary_gating_and_immutability(assessor_client, complex_report_asse
         db.close()
 
 
+def test_unedited_executive_summary_from_ai_schema_is_in_docx(
+    assessor_client, complex_report_assessment
+):
+    """Include an approved, unedited executive_summary in the generated report."""
+    summary_text = "Synthetic approved executive summary from the AI response schema."
+    db = SessionLocal()
+    try:
+        analysis = (
+            db.query(AIAnalysis)
+            .filter(AIAnalysis.id == complex_report_assessment["ai_summary_id"])
+            .first()
+        )
+        assert analysis is not None
+        analysis.response_json = {"executive_summary": summary_text}
+        analysis.edited_text = None
+        db.commit()
+    finally:
+        db.close()
+
+    assessment_id = complex_report_assessment["assessment"].id
+    response = assessor_client.post(
+        f"/api/v1/assessments/{assessment_id}/reports",
+        json={"format": "docx"},
+    )
+    assert response.status_code == 202
+
+    download = assessor_client.get(
+        f"/api/v1/reports/{response.json()['id']}/download"
+    )
+    assert download.status_code == 200
+    doc = docx.Document(io.BytesIO(download.content))
+    assert summary_text in _get_docx_all_text(doc)
+
+
 def test_unapproved_or_rejected_ai_summary_excluded(assessor_client, admin_user):
     """Test that rejected or unapproved executive summary is excluded and report states so."""
     db = SessionLocal()

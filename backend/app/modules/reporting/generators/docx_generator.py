@@ -273,7 +273,12 @@ class DocxReportGenerator:
 
         # Approved AI Summary or Fallback (Rule 3)
         ai_summary = self.data.get("approved_ai_summary")
-        if ai_summary and ai_summary.get("summary_text"):
+        ai_summary_text = (
+            ai_summary.get("executive_summary") or ai_summary.get("summary_text")
+            if ai_summary
+            else None
+        )
+        if ai_summary_text:
             p_ai_label = self.doc.add_paragraph()
             reviewer_str = sanitize_text(ai_summary.get("reviewed_by_name", "Lead Assessor"))
             rev_date = ai_summary.get("reviewed_at")
@@ -285,7 +290,7 @@ class DocxReportGenerator:
             r_ai_label.font.size = Pt(9.5)
             r_ai_label.font.color.rgb = RGBColor(80, 80, 80)
 
-            p_ai_text = self.doc.add_paragraph(sanitize_text(ai_summary.get("summary_text")))
+            p_ai_text = self.doc.add_paragraph(sanitize_text(ai_summary_text))
             p_ai_text.style = "Normal"
         else:
             p_no_ai = self.doc.add_paragraph(
