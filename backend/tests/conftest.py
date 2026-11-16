@@ -29,7 +29,6 @@ if not _test_database or "test" not in _test_database:
 os.environ["DATABASE_URL"] = _test_database_url
 os.environ["AI_ENABLED"] = "false"
 os.environ["GEMINI_API_KEY"] = ""
-os.environ["ANTHROPIC_API_KEY"] = ""
 
 from app.main import app
 from app.core.database import SessionLocal

@@ -61,7 +61,6 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       ZAP_API_URL: ${ZAP_API_URL:-http://zap:8080}
       ZAP_API_KEY: ${ZAP_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       AI_ENABLED: ${AI_ENABLED:-true}
@@ -91,7 +90,6 @@ services:
       TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@test-db:5432/secassess_test
       AI_ENABLED: "false"
       GEMINI_API_KEY: ""
-      ANTHROPIC_API_KEY: ""
       ZAP_API_URL: ${ZAP_API_URL:-http://zap:8080}
       ZAP_API_KEY: ${ZAP_API_KEY:-}
     depends_on:

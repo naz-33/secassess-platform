@@ -44,8 +44,6 @@ class Settings(BaseSettings):
     ZAP_SPIDER_MAX_DEPTH: int = 2
     ZAP_SPIDER_MAX_URLS: int = 200
     ZAP_SPIDER_MAX_DURATION_MINS: int = 2
-    ANTHROPIC_API_KEY: str = ""
-
     # Google Gemini AI Integration
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
