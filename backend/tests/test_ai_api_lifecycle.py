@@ -2,6 +2,7 @@
 import json
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
@@ -293,11 +294,17 @@ def test_caching_and_budget_enforcement(
         from app.modules.ai_analysis.service import AIAnalysisService
         from app.core.database import SessionLocal
 
-        mock_call.return_value = (
+        mock_result = (
             ScanInterpretationResponse.model_validate(valid_interpret),
             valid_interpret,
             50, 100, 30
         )
+
+        def fake_call_gemini_api(*args, **kwargs):
+            kwargs["on_api_call"]()
+            return mock_result
+
+        mock_call.side_effect = fake_call_gemini_api
 
         # First request
         r1 = assessor_client.post(f"/api/v1/assessments/{aid}/scans/{sid}/ai/interpret")
@@ -307,12 +314,21 @@ def test_caching_and_budget_enforcement(
         # Complete it
         db = SessionLocal()
         AIAnalysisService(db)._run_analysis_pipeline(uuid.UUID(a1_id))
+        repository = AIAnalysisService(db).repository
+        assert repository.count_calls_for_assessment(
+            lifecycle_setup["assessment"].id
+        ) == 1
         db.close()
 
         # Second request without force: must reuse cached analysis
         r2 = assessor_client.post(f"/api/v1/assessments/{aid}/scans/{sid}/ai/interpret")
         assert r2.status_code == 202
         assert r2.json()["id"] == a1_id
+        db = SessionLocal()
+        assert AIAnalysisService(db).repository.count_calls_for_assessment(
+            lifecycle_setup["assessment"].id
+        ) == 1
+        db.close()
 
         # Third request with force=true: triggers a new analysis
         r3 = assessor_client.post(f"/api/v1/assessments/{aid}/scans/{sid}/ai/interpret?force=true")
@@ -322,6 +338,84 @@ def test_caching_and_budget_enforcement(
 
     # Test budget limit: set max calls to 1
     monkeypatch.setattr(settings, "AI_MAX_CALLS_PER_ASSESSMENT", 1)
+    db = SessionLocal()
+    calls_before_cache_hit = AIAnalysisService(db).repository.count_calls_for_assessment(
+        lifecycle_setup["assessment"].id
+    )
+    db.close()
+    r_cached_at_quota = assessor_client.post(
+        f"/api/v1/assessments/{aid}/scans/{sid}/ai/interpret"
+    )
+    assert r_cached_at_quota.status_code == 202
+    assert r_cached_at_quota.json()["id"] in {a1_id, a3_id}
+    db = SessionLocal()
+    assert AIAnalysisService(db).repository.count_calls_for_assessment(
+        lifecycle_setup["assessment"].id
+    ) == calls_before_cache_hit
+    db.close()
+
     r_over_budget = assessor_client.post(f"/api/v1/assessments/{aid}/scans/{sid}/ai/interpret?force=true")
     assert r_over_budget.status_code == 429
     assert "budget" in r_over_budget.json()["detail"].lower()
+
+
+def test_all_analysis_cache_hits_bypass_quota():
+    """Cached responses for each AI function do not run the quota check."""
+    from app.modules.ai_analysis.service import AIAnalysisService
+
+    assessment_id = uuid.uuid4()
+    scan_id = uuid.uuid4()
+    finding_id = uuid.uuid4()
+    user = SimpleNamespace(id=uuid.uuid4())
+    cached = SimpleNamespace(finding_id=finding_id)
+
+    service = AIAnalysisService.__new__(AIAnalysisService)
+    service.repository = SimpleNamespace(
+        find_cached_analysis=lambda **kwargs: cached
+    )
+    service._assert_quota = lambda *args: (_ for _ in ()).throw(
+        AssertionError("Quota check ran before returning cached analysis")
+    )
+    service._to_read_dto = lambda analysis: analysis
+    service.assessment_service = SimpleNamespace(
+        get_assessment=lambda assessment_id: SimpleNamespace(
+            id=assessment_id, target_id=uuid.uuid4(), name="Synthetic assessment"
+        )
+    )
+    service.scan_service = SimpleNamespace(
+        get_scan=lambda scan_id: SimpleNamespace(
+            id=scan_id,
+            assessment_id=assessment_id,
+            tool=SimpleNamespace(value="nmap"),
+            raw_output="Synthetic scan",
+        )
+    )
+    service.finding_service = SimpleNamespace(
+        list_findings=lambda *args, **kwargs: [],
+        get_finding=lambda finding_id: SimpleNamespace(
+            id=finding_id,
+            assessment_id=assessment_id,
+            title="Synthetic finding",
+            category="test",
+            status=SimpleNamespace(value="unverified"),
+            effective_severity=SimpleNamespace(value="low"),
+            affected_url=None,
+            description="Synthetic description",
+            remediation=None,
+        ),
+        list_evidence_for_finding=lambda finding_id: [],
+    )
+    service.target_service = SimpleNamespace(
+        get_target=lambda target_id: SimpleNamespace(
+            id=target_id, name="Synthetic target", base_url="https://synthetic.invalid"
+        ),
+        list_scope_items=lambda target_id: [],
+    )
+
+    assert service.trigger_scan_interpretation(
+        assessment_id, scan_id, user
+    ) is cached
+    assert service.trigger_prioritization(assessment_id, user) is cached
+    cached.finding_id = finding_id
+    assert service.trigger_finding_explanation(finding_id, user) is cached
+    assert service.trigger_executive_summary(assessment_id, user) is cached

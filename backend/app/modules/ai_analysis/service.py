@@ -157,9 +157,6 @@ class AIAnalysisService:
         if scan.assessment_id != assessment_id:
             raise ConflictException(f"Scan {scan_id} does not belong to assessment {assessment_id}.")
 
-        # Check quota unless reusing cache
-        self._assert_quota(assessment_id, user)
-
         # Prepare raw context string
         raw_output = scan.raw_output or "No output captured for scan."
 
@@ -181,6 +178,8 @@ class AIAnalysisService:
             )
             if cached:
                 return self._to_read_dto(cached)
+
+        self._assert_quota(assessment_id, user)
 
         # Create pending analysis row
         analysis = AIAnalysis(
@@ -220,8 +219,6 @@ class AIAnalysisService:
         if not assessment:
             raise NotFoundException("Assessment", assessment_id)
 
-        self._assert_quota(assessment_id, user)
-
         findings = self.finding_service.list_findings(assessment_id, limit=200)
         findings_summary_items = []
         for f in findings:
@@ -248,6 +245,8 @@ class AIAnalysisService:
             )
             if cached:
                 return self._to_read_dto(cached)
+
+        self._assert_quota(assessment_id, user)
 
         analysis = AIAnalysis(
             assessment_id=assessment_id,
@@ -285,8 +284,6 @@ class AIAnalysisService:
         if not finding:
             raise NotFoundException("Finding", finding_id)
 
-        self._assert_quota(finding.assessment_id, user)
-
         evidences = self.finding_service.list_evidence_for_finding(finding_id)
         evidence_text_parts = []
         for e in evidences:
@@ -320,6 +317,8 @@ class AIAnalysisService:
             )
             if cached and cached.finding_id == finding_id:
                 return self._to_read_dto(cached)
+
+        self._assert_quota(finding.assessment_id, user)
 
         analysis = AIAnalysis(
             assessment_id=finding.assessment_id,
@@ -360,8 +359,6 @@ class AIAnalysisService:
 
         target = self.target_service.get_target(assessment.target_id)
         scope_items = self.target_service.list_scope_items(assessment.target_id) if target else []
-
-        self._assert_quota(assessment_id, user)
 
         findings = self.finding_service.list_findings(assessment_id, limit=200)
 
@@ -404,6 +401,8 @@ class AIAnalysisService:
             )
             if cached:
                 return self._to_read_dto(cached)
+
+        self._assert_quota(assessment_id, user)
 
         analysis = AIAnalysis(
             assessment_id=assessment_id,
@@ -692,6 +691,10 @@ class AIAnalysisService:
                 user_id=analysis.requested_by,
             )
 
+    def _record_api_call(self, analysis: AIAnalysis) -> None:
+        analysis.api_call_count += 1
+        self.repository.update(analysis)
+
     def _execute_interpret(self, analysis: AIAnalysis) -> None:
         scan = self.scan_service.get_scan(analysis.scan_id) if analysis.scan_id else None
         if not scan:
@@ -730,6 +733,7 @@ class AIAnalysisService:
                 "alone is not evidence of an exposed file."
             ),
             response_schema=ScanInterpretationResponse,
+            on_api_call=lambda: self._record_api_call(analysis),
         )
 
         # Grounding check: verify cited evidence IDs exist in this assessment
@@ -768,6 +772,7 @@ class AIAnalysisService:
             redacted_prompt=redacted_prompt,
             system_instruction="You are an expert security assessor prioritizing discovered vulnerabilities.",
             response_schema=PrioritizationResponse,
+            on_api_call=lambda: self._record_api_call(analysis),
         )
 
         # Grounding check: Filter out non-existent finding IDs and validate reference formats
@@ -809,6 +814,7 @@ class AIAnalysisService:
             redacted_prompt=redacted_prompt,
             system_instruction="You are a principal security researcher giving actionable remediation advice.",
             response_schema=FindingExplanationResponse,
+            on_api_call=lambda: self._record_api_call(analysis),
         )
 
         # Validate reference formats
@@ -871,6 +877,7 @@ class AIAnalysisService:
             redacted_prompt=redacted_prompt,
             system_instruction="You are a Principal Security Auditor drafting an executive summary based ONLY on confirmed findings.",
             response_schema=ExecutiveSummaryResponse,
+            on_api_call=lambda: self._record_api_call(analysis),
         )
 
         analysis.response_json = response_dict

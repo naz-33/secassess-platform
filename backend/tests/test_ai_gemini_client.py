@@ -283,6 +283,7 @@ def test_full_outgoing_prompts_redact_all_untrusted_fields(monkeypatch):
             )
 
     service = AIAnalysisService.__new__(AIAnalysisService)
+    service.repository = SimpleNamespace(update=lambda analysis: analysis)
     service.finding_service = FindingService()
     service.scan_service = SimpleNamespace(
         get_scan=lambda scan_id: SimpleNamespace(
@@ -311,12 +312,22 @@ def test_full_outgoing_prompts_redact_all_untrusted_fields(monkeypatch):
         gemini_client, "_validate_or_repair_response", return_value=(None, {})
     ):
         service._execute_interpret(
-            SimpleNamespace(assessment_id=uuid.uuid4(), scan_id=uuid.uuid4())
+            SimpleNamespace(
+                assessment_id=uuid.uuid4(),
+                scan_id=uuid.uuid4(),
+                api_call_count=0,
+            )
         )
         service._execute_explain(
-            SimpleNamespace(assessment_id=uuid.uuid4(), finding_id=uuid.uuid4())
+            SimpleNamespace(
+                assessment_id=uuid.uuid4(),
+                finding_id=uuid.uuid4(),
+                api_call_count=0,
+            )
         )
-        service._execute_summarize(SimpleNamespace(assessment_id=uuid.uuid4()))
+        service._execute_summarize(
+            SimpleNamespace(assessment_id=uuid.uuid4(), api_call_count=0)
+        )
 
     outgoing_bodies = [
         call.kwargs["contents"]

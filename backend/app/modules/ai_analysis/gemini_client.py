@@ -6,7 +6,7 @@ It enforces strict type safety: outbound prompts are rejected unless wrapped in 
 import json
 import logging
 import time
-from typing import TypeVar, Type, Tuple, Dict, Any
+from typing import TypeVar, Type, Tuple, Dict, Any, Callable, Optional
 from pydantic import BaseModel, ValidationError
 
 # The Google Gen AI Python SDK (google-genai>=3.0.0)
@@ -43,6 +43,7 @@ def call_gemini_api(
     redacted_prompt: RedactedText,
     system_instruction: str,
     response_schema: Type[T],
+    on_api_call: Optional[Callable[[], None]] = None,
 ) -> Tuple[T, Dict[str, Any], int, int, int]:
     """
     Sole sanctioned outbound function executing inference via the Google Gemini API.
@@ -91,6 +92,8 @@ def call_gemini_api(
                 max_retries + 1,
             )
 
+            if on_api_call:
+                on_api_call()
             response = client.models.generate_content(
                 model=settings.GEMINI_MODEL,
                 contents=redacted_prompt.text,
@@ -126,6 +129,7 @@ def call_gemini_api(
                 raw_text=raw_text,
                 response_schema=response_schema,
                 system_instruction=system_instruction,
+                on_api_call=on_api_call,
             )
 
             return parsed_model, response_dict, input_tokens, output_tokens, latency_ms
@@ -169,11 +173,14 @@ def _validate_or_repair_response(
     raw_text: str,
     response_schema: Type[T],
     system_instruction: str,
+    on_api_call: Optional[Callable[[], None]] = None,
 ) -> Tuple[T, Dict[str, Any]]:
     """Validate model output against response_schema, attempting one schema repair if malformed."""
     parse_err_msg = ""
     # Attempt 1: Direct validation
     try:
+        if on_api_call:
+            on_api_call()
         data = json.loads(raw_text)
         validated = response_schema.model_validate(data)
         return validated, data

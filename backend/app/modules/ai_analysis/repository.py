@@ -73,13 +73,15 @@ class AIAnalysisRepository:
         return self.db.execute(stmt).scalars().first()
 
     def count_calls_for_assessment(self, assessment_id: uuid.UUID) -> int:
-        """Count total AI analysis invocations (pending or completed) for an assessment."""
-        stmt = select(func.count(AIAnalysis.id)).where(AIAnalysis.assessment_id == assessment_id)
+        """Count outbound AI API requests for an assessment."""
+        stmt = select(func.coalesce(func.sum(AIAnalysis.api_call_count), 0)).where(
+            AIAnalysis.assessment_id == assessment_id
+        )
         return self.db.execute(stmt).scalar() or 0
 
     def count_calls_for_user_since(self, user_id: uuid.UUID, since: datetime) -> int:
-        """Count total AI analysis requests initiated by a user within a time window."""
-        stmt = select(func.count(AIAnalysis.id)).where(
+        """Count outbound AI API requests initiated by a user within a time window."""
+        stmt = select(func.coalesce(func.sum(AIAnalysis.api_call_count), 0)).where(
             and_(
                 AIAnalysis.requested_by == user_id,
                 AIAnalysis.created_at >= since,
@@ -145,4 +147,3 @@ class AIAnalysisRepository:
             .order_by(AIAnalysis.reviewed_at.desc(), AIAnalysis.created_at.desc())
         )
         return self.db.execute(stmt).scalars().first()
-
