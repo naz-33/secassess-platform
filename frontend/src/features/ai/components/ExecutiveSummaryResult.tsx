@@ -17,7 +17,10 @@ export function ExecutiveSummaryResult({ analysis }: ExecutiveSummaryResultProps
   const reviewMutation = useReviewAnalysis(analysis.id);
 
   const res = analysis.response_json || {};
-  const originalSummary = (res.executive_summary as string) || "No summary text generated.";
+  const originalSummary =
+    (res.executive_summary as string) ||
+    (res.summary_text as string) ||
+    "No summary text generated.";
   const scopeMethod = (res.scope_and_method as string) || "";
   const keyRisks = (res.key_risks as string) || "";
   const nextSteps = (res.recommended_next_steps as string) || "";

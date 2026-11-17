@@ -286,6 +286,9 @@ describe("AI Features, Result Frames & Review Flows", () => {
     renderWithProviders(<ExecutiveSummaryResult analysis={mockSummaryAnalysis} />);
 
     expect(screen.getByText("AI Executive Summary Draft")).toBeInTheDocument();
+    expect(
+      screen.getByText("During the security assessment, one critical finding was confirmed.")
+    ).toBeInTheDocument();
     expect(screen.getByText(/Only approved executive summaries will appear in final report generation/i)).toBeInTheDocument();
 
     // Switch to edited tab
@@ -301,6 +304,19 @@ describe("AI Features, Result Frames & Review Flows", () => {
     await userEvent.click(approveBtn);
 
     expect(await screen.findByText(/Executive summary approved for report inclusion/i)).toBeInTheDocument();
+  });
+
+  it("executive summary reads the legacy summary_text response key", () => {
+    renderWithProviders(
+      <ExecutiveSummaryResult
+        analysis={{
+          ...mockSummaryAnalysis,
+          response_json: { summary_text: "Legacy executive summary narrative." },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Legacy executive summary narrative.")).toBeInTheDocument();
   });
 
   it("passes axe accessibility checks on AI results", async () => {

@@ -35,7 +35,10 @@ def _get_genai_client() -> genai.Client:
 
     return genai.Client(
         api_key=settings.GEMINI_API_KEY,
-        http_options=types.HttpOptions(timeout=settings.AI_TIMEOUT_SECONDS * 1000),
+        http_options=types.HttpOptions(
+            api_version="v1beta",
+            timeout=settings.AI_TIMEOUT_SECONDS * 1000,
+        ),
     )
 
 
