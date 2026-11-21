@@ -1,0 +1,53 @@
+<?php
+
+namespace App\Modules\Auth\Models;
+
+// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Database\Factories\UserFactory;
+use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+#[Fillable(['name', 'username', 'email', 'password', 'email_verified_at', 'terms_privacy_accepted', 'terms_privacy_accepted_at'])]
+#[Hidden(['password', 'remember_token'])]
+class User extends Authenticatable
+{
+    /** @use HasFactory<UserFactory> */
+    use HasApiTokens, HasFactory, Notifiable;
+
+    /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password' => 'hashed',
+            'terms_privacy_accepted' => 'boolean',
+            'terms_privacy_accepted_at' => 'datetime',
+        ];
+    }
+
+    protected static function newFactory(): UserFactory
+    {
+        return UserFactory::new();
+    }
+
+    /**
+     * Get the trackers for the user.
+     */
+    public function trackers(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(\App\Modules\Tracker\Models\Tracker::class);
+    }
+
+    public function favoriteGenres(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(\App\Modules\Discover\Models\Genre::class, 'user_favorite_genres');
+    }
+}

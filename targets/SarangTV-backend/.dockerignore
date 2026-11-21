@@ -1,0 +1,23 @@
+# Laravel / PHP
+/vendor
+/.env
+/.env.example
+/.phpunit.result.cache
+/.phpunit.cache
+/bootstrap/cache/*.php
+
+# Node / front‑end
+/node_modules
+/public/build
+/public/mix-manifest.json
+/webpack.mix.js
+
+# Git / IDE
+/.git
+/.gitignore
+/.gitattributes
+/.vscode
+/.idea
+
+# Misc
+/.DS_Store

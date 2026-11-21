@@ -12,11 +12,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-secassess}",
-        ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-secassess}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -36,11 +32,7 @@ services:
     volumes:
       - test_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d secassess_test",
-        ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d secassess_test" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -70,7 +62,7 @@ services:
       ZAP_API_URL: ${ZAP_API_URL:-http://zap:8080}
       ZAP_API_KEY: ${ZAP_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3-flash-preview}
       AI_ENABLED: ${AI_ENABLED:-true}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-8192}
@@ -169,11 +161,51 @@ services:
     networks:
       - secassess_net
 
+  kdrama-db:
+    image: mysql:8.0
+    container_name: secassess-kdrama-db
+    environment:
+      MYSQL_DATABASE: kdrama_watchlist
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    volumes:
+      - kdrama_db_data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    networks:
+      - secassess_net
+
+  kdrama-target:
+    build:
+      context: ./targets/SarangTV-backend
+    container_name: secassess-kdrama-target
+    depends_on:
+      kdrama-db:
+        condition: service_healthy
+    env_file:
+      - ./targets/SarangTV-backend\.env
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: kdrama-db
+      DB_PORT: 3306
+      DB_DATABASE: kdrama_watchlist
+      DB_USERNAME: root
+      DB_PASSWORD: ""
+      APP_ENV: local
+      APP_URL: http://localhost:8081
+    ports:
+      - "8081:8000"
+    networks:
+      - secassess_net
+
 volumes:
   postgres_data:
     name: secassess_postgres_data
   test_postgres_data:
     name: secassess_test_postgres_data
+  kdrama_db_data:
 
 networks:
   secassess_net:

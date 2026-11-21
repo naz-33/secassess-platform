@@ -9,7 +9,7 @@
 
 > [!WARNING]
 > **Ethical & Authorized Testing Only:**  
-> This platform contains and orchestrates security testing tools (Nmap, OWASP ZAP, network probes). It is strictly intended for educational and research usage against instructor-approved local targets (such as the included OWASP Juice Shop container). Testing against any unauthorized third-party target without written consent is illegal and strictly prohibited.
+> This platform contains and orchestrates security testing tools (Nmap, OWASP ZAP, network probes). It is strictly intended for educational and research usage against instructor-approved local targets (such as the included OWASP Juice Shop and SarangTV target containers). Testing against any unauthorized third-party target without written consent is illegal and strictly prohibited.
 
 ---
 
@@ -79,7 +79,9 @@ secassess/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── vite.config.ts
-├── docker-compose.yml          # Postgres 16, Backend, Frontend, and optional target containers
+├── targets/
+│   └── SarangTV-backend/       # Target vulnerable application (Laravel/MySQL) for security testing
+├── docker-compose.yml          # Postgres 16, MySQL 8.0, Backend, Frontend, and target containers
 ├── Makefile                    # Standard orchestration commands
 ├── .env.example                # Sample environment configuration
 └── README.md
@@ -91,7 +93,7 @@ secassess/
 
 - **Git** to clone the repository.
 - **Docker Desktop** on Windows or macOS, or Docker Engine with the Compose plugin on Linux. Docker Compose v2 is used with the `docker compose` command.
-- **PostgreSQL 16 is included in the Docker setup.** You do not need to install PostgreSQL separately unless you choose the native, non-Docker setup below.
+- **PostgreSQL 16 and MySQL 8.0 are included in the Docker setup.** You do not need to install them separately unless you choose the native, non-Docker setup below.
 - For native development without Docker: Python 3.12+, Node.js 20+, and PostgreSQL 16+.
 - **Make** is optional; the commands below work without it.
 
@@ -131,7 +133,7 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-The Docker setup uses development defaults and does not require an AI API key. To use optional AI or ZAP integrations, edit `.env` and configure the relevant keys (`GEMINI_API_KEY` and/or `ZAP_API_KEY`). Do not share or commit your `.env` file. The sample credentials and secrets are for local development only; replace them before any non-local deployment.
+The Docker setup uses development defaults and does not require an AI API key. To use optional AI or ZAP integrations, edit `.env` and configure the relevant keys (`GEMINI_API_KEY` and/or `ZAP_API_KEY`). The Gemini model defaults to `gemini-3-flash-preview` and can be overridden via `GEMINI_MODEL`. Do not share or commit your `.env` file. The sample credentials and secrets are for local development only; replace them before any non-local deployment.
 
 ### Step 4: Build and start the application
 
@@ -141,7 +143,7 @@ From the repository root, run:
 docker compose up --build -d
 ```
 
-This builds the frontend and backend containers and starts them with PostgreSQL 16. The backend applies database migrations during startup. You do not need a local PostgreSQL installation or a separate migration command for this setup.
+This builds the frontend, backend, and SarangTV target containers and starts them with PostgreSQL 16 and MySQL 8.0 (`secassess-kdrama-db`). The backend applies database migrations automatically during startup. You do not need a local PostgreSQL/MySQL installation or a separate migration command for this setup.
 
 Check that the containers are running:
 
@@ -176,15 +178,19 @@ Use one of these local demo accounts:
 
 Change these development credentials before using the application beyond your own local machine.
 
-### Optional: Start the local security-testing lab
+### Local Security-Testing Targets
 
-To also start OWASP Juice Shop and OWASP ZAP, run this from the repository root:
+SecAssess includes isolated target applications for safe assessment practice:
+- **SarangTV Target (`kdrama-target`)**: Started automatically with core Compose services on [http://localhost:8081](http://localhost:8081) (internal Docker network: `http://kdrama-target:8000`), backed by the `secassess-kdrama-db` MySQL database.
+- **OWASP Juice Shop & OWASP ZAP**: Provided as an optional profile for web vulnerability assessment practice.
+
+To start OWASP Juice Shop and OWASP ZAP alongside the platform, run from the repository root:
 
 ```text
 docker compose --profile targets up --build -d
 ```
 
-Juice Shop is available at [http://localhost:3000](http://localhost:3000). Within Docker, the backend reaches ZAP at `http://zap:8080`; from a host-run backend, use `http://localhost:8080`. Only test systems you own or are explicitly authorized to assess. The included Juice Shop is intentionally vulnerable and is meant for local practice.
+Juice Shop is available at [http://localhost:3000](http://localhost:3000). Within Docker, the backend reaches ZAP at `http://zap:8080`; from a host-run backend, use `http://localhost:8080`. Only test systems you own or are explicitly authorized to assess. All included target applications are intentionally vulnerable and strictly meant for local practice.
 
 ### Stop or inspect the application
 
@@ -200,7 +206,7 @@ Press `Ctrl+C` to stop viewing logs. To stop the containers:
 docker compose down
 ```
 
-`docker compose down` stops and removes the containers but preserves the PostgreSQL data volume, so your data remains for the next start. Avoid `docker compose down -v` unless you intend to delete that data.
+`docker compose down` stops and removes the containers but preserves the persistent data volumes (`secassess_postgres_data` and `kdrama_db_data`), so your data remains for the next start. Avoid `docker compose down -v` unless you intend to delete that data.
 
 ## 5. Native Development (Without Docker)
 
@@ -267,8 +273,9 @@ VITE_BACKEND_URL=http://localhost:8000 npm run dev
 | **Frontend App** | `http://localhost:5173` | Dashboard, Recharts visualization, API health indicator |
 | **API Docs (Swagger)** | `http://localhost:8000/docs` | Interactive OpenAPI documentation for all 12 modules |
 | **API Health Check** | `http://localhost:8000/api/v1/health` | Validates app state & `SELECT 1` DB connection |
+| **SarangTV Target** | `http://localhost:8081` | Laravel target app (Docker: `http://kdrama-target:8000`); backed by `secassess-kdrama-db` (MySQL) |
 | **Juice Shop Target** | `http://localhost:3000` | (When started with `--profile targets`) |
-| **ZAP Daemon API** | `http://localhost:8080` | Host-published URL; backend uses `http://zap:8080` in Docker |
+| **ZAP Daemon API** | `http://localhost:8080` | Host-published URL; backend uses `http://zap:8080` in Docker (with `--profile targets`) |
 
 ---
 
