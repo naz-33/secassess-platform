@@ -14,8 +14,15 @@ export function AIResultFrame({ analysis, title, children }: AIResultFrameProps)
   const redactionReport = analysis.redaction_report || {};
   const redactionEntries = Object.entries(redactionReport);
 
-  const confidence = (analysis.response_json?.confidence as string) || "medium";
-  const caveats = (analysis.response_json?.caveats as string[]) || [];
+  const rawConfidence = (analysis.response_json?.confidence as string) || (analysis.status === "pending" ? "pending" : "medium");
+  const confidence = rawConfidence.toLowerCase();
+
+  const rawCaveats = analysis.response_json?.caveats;
+  const caveats: string[] = Array.isArray(rawCaveats)
+    ? rawCaveats.map(String).filter((c) => c.trim().length > 0)
+    : typeof rawCaveats === "string" && rawCaveats.trim()
+    ? [rawCaveats.trim()]
+    : [];
 
   return (
     <div className="rounded-lg border border-purple-800/60 bg-purple-950/20 p-5 space-y-4">
@@ -65,6 +72,8 @@ export function AIResultFrame({ analysis, title, children }: AIResultFrameProps)
                 ? "bg-emerald-950 text-emerald-300 border-emerald-800"
                 : confidence === "low"
                 ? "bg-amber-950 text-amber-300 border-amber-800"
+                : confidence === "pending"
+                ? "bg-purple-950 text-purple-300 border-purple-800"
                 : "bg-blue-950 text-blue-300 border-blue-800"
             }`}
           >

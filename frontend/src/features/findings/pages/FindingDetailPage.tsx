@@ -6,6 +6,7 @@ import {
   Sparkles,
   AlertCircle,
   RefreshCw,
+  Clock,
 } from "lucide-react";
 import { useFinding, useFindingVerifications, useFindingSeverityHistory } from "../hooks";
 import { SeverityBadge, StatusBadge, SourceBadge } from "../components/FindingBadges";
@@ -15,7 +16,7 @@ import { SeverityOverrideForm } from "../components/SeverityOverrideForm";
 import { SeverityHistoryTable } from "../components/SeverityHistoryTable";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { ExplainFindingResult } from "../../ai/components/ExplainFindingResult";
-import { useExplainFinding, useAIStatus } from "../../ai/hooks";
+import { useExplainFinding, useAIAnalysis, useAIAnalyses, useAIStatus } from "../../ai/hooks";
 import { Button } from "../../../components/Button";
 import { LoadingState, ErrorState } from "../../../components/StatusStates";
 import { RequireRole } from "../../../auth/RequireRole";
@@ -41,16 +42,25 @@ export function FindingDetailPage() {
   const { data: aiStatus } = useAIStatus();
   const isAiConfigured = Boolean(aiStatus?.configured && aiStatus?.enabled);
 
+  const effectiveAssessmentId = assessmentId || finding?.assessment_id;
+  const { data: assessmentAnalyses } = useAIAnalyses(effectiveAssessmentId, { function: "explain" });
+  const latestExistingExplain = (assessmentAnalyses || [])
+    .filter((a) => a.finding_id === findingId)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+
   const explainMutation = useExplainFinding(findingId || "");
   const [explainAnalysis, setExplainAnalysis] = useState<AIAnalysisRead | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  const activeAnalysisId = explainAnalysis?.id || latestExistingExplain?.id;
+  const { data: updatedExplainAnalysis } = useAIAnalysis(activeAnalysisId);
+  const displayedExplainAnalysis = updatedExplainAnalysis || explainAnalysis || latestExistingExplain;
 
   if (isLoading) return <LoadingState message="Loading finding details..." />;
   if (error || !finding) {
     return <ErrorState title="Failed to load finding" error={error} onRetry={() => refetch()} />;
   }
 
-  const effectiveAssessmentId = assessmentId || finding.assessment_id;
   const isAiProposed = finding.source === "ai";
 
   const handleExplain = async (force = false) => {
@@ -137,8 +147,8 @@ export function FindingDetailPage() {
               size="sm"
               variant="outline"
               onClick={() => handleExplain(false)}
-              disabled={!isAiConfigured || explainMutation.isPending}
-              isLoading={explainMutation.isPending}
+              disabled={!isAiConfigured || explainMutation.isPending || displayedExplainAnalysis?.status === "pending"}
+              isLoading={explainMutation.isPending || displayedExplainAnalysis?.status === "pending"}
               title={!isAiConfigured ? "AI not configured on server" : "Generate deep technical explanation and remediation steps"}
               className="text-xs h-8"
             >
@@ -163,20 +173,34 @@ export function FindingDetailPage() {
       )}
 
       {/* AI Explanation Panel */}
-      {explainAnalysis && (
+      {displayedExplainAnalysis?.status === "pending" && (
+        <div role="status" className="p-4 rounded-lg border border-purple-800/60 bg-purple-950/20 text-xs text-purple-300 flex items-center gap-2.5">
+          <Clock className="h-4 w-4 animate-spin text-purple-400 shrink-0" />
+          <span>AI deep explanation and remediation guidance is generating in the background...</span>
+        </div>
+      )}
+
+      {displayedExplainAnalysis?.status === "failed" && (
+        <div role="alert" className="p-3 rounded bg-rose-950/50 border border-rose-800 text-xs text-rose-300">
+          AI explanation failed: {displayedExplainAnalysis.error || "The provider returned no usable result. Check the key, quota, and connection, then retry."}
+        </div>
+      )}
+
+      {displayedExplainAnalysis?.status === "completed" && (
         <div className="space-y-2">
           <div className="flex justify-end">
             <Button
               size="sm"
               variant="ghost"
               onClick={() => handleExplain(true)}
+              disabled={explainMutation.isPending}
               className="text-xs h-7 gap-1 text-purple-300 hover:text-white"
             >
-              <RefreshCw className="h-3 w-3 mr-1" />
+              <RefreshCw className={`h-3 w-3 mr-1 ${explainMutation.isPending ? "animate-spin" : ""}`} />
               <span>Rerun Explanation (force=true)</span>
             </Button>
           </div>
-          <ExplainFindingResult analysis={explainAnalysis} />
+          <ExplainFindingResult analysis={displayedExplainAnalysis} />
         </div>
       )}
 

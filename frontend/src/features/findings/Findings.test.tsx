@@ -132,6 +132,9 @@ const server = setupServer(
       remaining_budget: { calls: 15 },
     });
   }),
+  http.get("/api/v1/assessments/:id/ai-analyses", () => {
+    return HttpResponse.json([]);
+  }),
   http.get("/api/v1/assessments/assess-1/findings/summary", () => {
     return HttpResponse.json(mockSummary);
   }),

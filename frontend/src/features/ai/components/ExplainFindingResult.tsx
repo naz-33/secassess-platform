@@ -8,12 +8,44 @@ interface ExplainFindingResultProps {
 
 export function ExplainFindingResult({ analysis }: ExplainFindingResultProps) {
   const res = analysis.response_json || {};
-  const explanation = (res.explanation as string) || "No detailed explanation generated.";
-  const likelyImpact = (res.likely_impact as string) || "—";
-  const exploitability = (res.exploitability_notes as string) || "—";
-  const remediation = (res.remediation_steps as string) || "";
-  const suggestedSev = (res.suggested_severity as string) || "";
-  const references = (res.references as string[]) || [];
+  const isPending = analysis.status === "pending";
+
+  const explanation =
+    (res.explanation as string) ||
+    (res.vulnerability_mechanism as string) ||
+    (res.mechanism as string) ||
+    (res.description as string) ||
+    (isPending ? "AI explanation is generating in the background..." : "No detailed explanation generated.");
+
+  const likelyImpact =
+    (res.likely_impact as string) ||
+    (res.impact as string) ||
+    (isPending ? "Pending analysis..." : "—");
+
+  const exploitability =
+    (res.exploitability_notes as string) ||
+    (res.exploitability as string) ||
+    (res.prerequisites as string) ||
+    (isPending ? "Pending analysis..." : "—");
+
+  const rawRemediation = res.remediation_steps ?? res.remediation ?? res.recommended_fix;
+  const remediationSteps: string[] = Array.isArray(rawRemediation)
+    ? rawRemediation.map(String).filter((s) => s.trim().length > 0)
+    : typeof rawRemediation === "string" && rawRemediation.trim()
+    ? [rawRemediation.trim()]
+    : [];
+
+  const suggestedSev =
+    (res.suggested_severity as string) ||
+    (res.severity as string) ||
+    "";
+
+  const rawRefs = res.references;
+  const references: string[] = Array.isArray(rawRefs)
+    ? rawRefs.map(String).filter((r) => r.trim().length > 0)
+    : typeof rawRefs === "string" && rawRefs.trim()
+    ? [rawRefs.trim()]
+    : [];
 
   return (
     <AIResultFrame analysis={analysis} title="AI Deep Explanation & Remediation">
@@ -53,14 +85,24 @@ export function ExplainFindingResult({ analysis }: ExplainFindingResultProps) {
       </div>
 
       {/* Remediation code / config steps */}
-      {remediation && (
-        <div className="space-y-1.5 bg-slate-900/60 p-4 rounded-md border border-slate-800">
+      {remediationSteps.length > 0 && (
+        <div className="space-y-2 bg-slate-900/60 p-4 rounded-md border border-slate-800">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
             Concrete Remediation Advice
           </h3>
-          <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed font-sans">
-            {remediation}
-          </p>
+          {remediationSteps.length === 1 ? (
+            <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed font-sans">
+              {remediationSteps[0]}
+            </p>
+          ) : (
+            <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-200 leading-relaxed font-sans">
+              {remediationSteps.map((step, idx) => (
+                <li key={idx} className="pl-1">
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
 
