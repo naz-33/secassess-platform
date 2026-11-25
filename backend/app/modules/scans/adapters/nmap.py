@@ -9,6 +9,50 @@ from app.modules.recon import NmapParser
 SAFE_PORT_RANGE_REGEX = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$")
 
 
+def _validate_custom_ports(ports_val: str, max_ports: int) -> None:
+    """Validate custom Nmap port ranges are within 1-65535 and total unique ports <= max_ports."""
+    if not SAFE_PORT_RANGE_REGEX.match(ports_val):
+        raise ValueError(f"Invalid port specification '{ports_val}'. Must match '80,443' or '1-1024'.")
+
+    items = ports_val.split(",")
+    if len(items) > max_ports:
+        raise ValueError(
+            f"Too many port specification items ({len(items)}). Maximum allowed is {max_ports}."
+        )
+
+    intervals: List[tuple[int, int]] = []
+    for item in items:
+        if "-" in item:
+            start_str, end_str = item.split("-", 1)
+            start, end = int(start_str), int(end_str)
+        else:
+            start = end = int(item)
+
+        if not (1 <= start <= end <= 65535):
+            raise ValueError(
+                f"Invalid port range '{item}'. Ports must satisfy 1 <= start <= end <= 65535."
+            )
+        if (end - start + 1) > max_ports:
+            raise ValueError(
+                f"Port range '{item}' exceeds maximum allowed port count of {max_ports}."
+            )
+        intervals.append((start, end))
+
+    intervals.sort()
+    merged: List[List[int]] = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    unique_count = sum(end - start + 1 for start, end in merged)
+    if unique_count > max_ports:
+        raise ValueError(
+            f"Custom ports specify {unique_count} unique ports, exceeding maximum allowed ({max_ports})."
+        )
+
+
 class NmapAdapter(ToolAdapter):
     """Adapter executing Nmap port and service version scans within strict safe limits."""
 
@@ -55,13 +99,14 @@ class NmapAdapter(ToolAdapter):
         argv.append(timing)
 
         # Port specifications
-        if "ports" in opts and opts["ports"]:
+        if "ports" in opts and opts["ports"] is not None and str(opts["ports"]).strip():
             ports_val = str(opts["ports"]).strip()
-            if not SAFE_PORT_RANGE_REGEX.match(ports_val):
-                raise ValueError(f"Invalid port specification '{ports_val}'. Must match '80,443' or '1-1024'.")
+            _validate_custom_ports(ports_val, settings.NMAP_MAX_CUSTOM_PORTS)
             argv.extend(["-p", ports_val])
         else:
             top_ports = opts.get("top_ports", 100)
+            if isinstance(top_ports, bool):
+                raise ValueError(f"top_ports must be an integer between 1 and 1000, got: {top_ports}")
             try:
                 top_ports_int = int(top_ports)
                 if not (1 <= top_ports_int <= 1000):

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from fastapi import BackgroundTasks, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -89,13 +90,9 @@ class ReportingService:
         if user_role not in ("assessor", "admin"):
             raise ForbiddenException("Only assessors and administrators can generate reports.")
 
-        assessment = self.assessment_service.get_assessment(assessment_id)
+        assessment = self.assessment_service.lock_assessment(assessment_id)
         if not assessment:
             raise NotFoundException("Assessment", assessment_id)
-
-        # Enforce single generation at a time per assessment
-        if self.repository.has_pending_report(assessment_id):
-            raise ConflictException("A report generation task is already in progress for this assessment.")
 
         fmt_clean = request.format.strip().lower()
         if fmt_clean not in ("docx", "pdf"):
@@ -108,21 +105,44 @@ class ReportingService:
             )
 
         report_fmt = ReportFormat.PDF if fmt_clean == "pdf" else ReportFormat.DOCX
-        version = self.repository.get_next_version(assessment_id)
 
-        report = Report(
-            assessment_id=assessment_id,
-            version=version,
-            format=report_fmt,
-            status=ReportStatus.PENDING,
-            generated_by=user.id,
-            template_version="1.0.0",
-            generator_version="1.0.0",
-            snapshot_json={},
-            unverified_count_at_generation=0,
-            confirmed_count_at_generation=0,
-        )
-        created = self.repository.create(report)
+        max_attempts = 3
+        created: Optional[Report] = None
+        for attempt in range(max_attempts):
+            # Enforce single generation at a time per assessment
+            if self.repository.has_pending_report(assessment_id):
+                raise ConflictException("A report generation task is already in progress for this assessment.")
+
+            version = self.repository.get_next_version(assessment_id)
+            report = Report(
+                assessment_id=assessment_id,
+                version=version,
+                format=report_fmt,
+                status=ReportStatus.PENDING,
+                generated_by=user.id,
+                template_version="1.0.0",
+                generator_version="1.0.0",
+                snapshot_json={},
+                unverified_count_at_generation=0,
+                confirmed_count_at_generation=0,
+            )
+            try:
+                created = self.repository.create(report)
+                break
+            except IntegrityError as exc:
+                self.db.rollback()
+                err_msg = str(exc.orig or exc).lower()
+                if "uq_reports_one_pending_per_assessment" in err_msg or self.repository.has_pending_report(assessment_id):
+                    raise ConflictException(
+                        "A report generation task is already in progress for this assessment."
+                    ) from exc
+                if attempt == max_attempts - 1:
+                    raise ConflictException(
+                        "Could not allocate a unique report version due to concurrent requests."
+                    ) from exc
+                self.assessment_service.lock_assessment(assessment_id)
+
+        assert created is not None
 
         self.audit_service.log_action(
             action="report_generation_requested",

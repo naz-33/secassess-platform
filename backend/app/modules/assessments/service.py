@@ -58,6 +58,13 @@ class AssessmentService:
             return None
         return AssessmentRead.model_validate(assessment)
 
+    def lock_assessment(self, assessment_id: uuid.UUID) -> Optional[AssessmentRead]:
+        """Acquire a row-level lock on the assessment for the current transaction."""
+        assessment = self.repository.get_by_id_for_update(assessment_id)
+        if not assessment:
+            return None
+        return AssessmentRead.model_validate(assessment)
+
     def list_assessments(self, limit: int = 100, offset: int = 0) -> List[AssessmentRead]:
         """List assessments ordered by creation date."""
         records = self.repository.list_all(limit=limit, offset=offset)

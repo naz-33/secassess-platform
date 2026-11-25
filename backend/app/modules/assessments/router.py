@@ -84,6 +84,7 @@ def trigger_assessment_scan(
             assessment_id=assessment_id,
             scan_in=scan_in,
             background_tasks=background_tasks,
+            user_id=current_user.id,
         )
     except ValueError as ve:
         raise HTTPException(
@@ -169,6 +170,7 @@ def trigger_web_assessment(
             assessment_id=assessment_id,
             request=request,
             background_tasks=background_tasks,
+            user_id=current_user.id,
         )
     except ValueError as ve:
         raise HTTPException(

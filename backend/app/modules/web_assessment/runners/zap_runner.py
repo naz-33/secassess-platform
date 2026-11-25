@@ -7,6 +7,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import httpx
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.exceptions import ScopeViolationException
+from app.modules.audit import AuditService
 from app.modules.targets import ScopeManager
 from app.modules.web_assessment.parsers.zap_parser import parse_zap_alerts
 from app.modules.web_assessment.types import CandidateFinding
@@ -63,6 +65,10 @@ class ZapRunner:
     """
     OWASP ZAP integration runner interacting with the ZAP daemon REST API.
     Enforces scope restrictions, non-destructive defaults, and graceful error handling.
+
+    Note: ZAP cannot pin IPs per request via its REST API, so the ZAP container
+    must run on an isolated Docker network (`internal: true`) that can only reach
+    the authorized target.
     """
 
     def __init__(
@@ -76,9 +82,46 @@ class ZapRunner:
         self.db = db
         self.target_id = target_id
         self.scope_manager = ScopeManager(db)
+        self.audit_service = AuditService(db)
         self.zap_url = (zap_api_url or settings.ZAP_API_URL).rstrip("/")
         self.zap_key = zap_api_key if zap_api_key is not None else settings.ZAP_API_KEY
         self.timeout = timeout
+
+    def _log_audit(self, action: str, detail: Dict[str, Any]) -> None:
+        if not isinstance(self.db, Session):
+            return
+        self.audit_service.log_action(action=action, detail=detail)
+
+    def _resolve_and_authorize_url(self, target_url: str) -> List[str]:
+        """Resolve and authorize target_url's host before ZAP spidering or scanning."""
+        parsed = urllib.parse.urlsplit(target_url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        try:
+            resolved_ips = self.scope_manager.resolve_and_authorize(self.target_id, host, port)
+        except ScopeViolationException as exc:
+            self._log_audit(
+                action="zap_scope_rejected",
+                detail={
+                    "target_id": str(self.target_id),
+                    "url": target_url,
+                    "host": host,
+                    "port": port,
+                    "reason": str(exc.detail),
+                },
+            )
+            raise
+        self._log_audit(
+            action="zap_target_resolved",
+            detail={
+                "target_id": str(self.target_id),
+                "url": target_url,
+                "host": host,
+                "port": port,
+                "resolved_ips": resolved_ips,
+            },
+        )
+        return resolved_ips
 
     def _request(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make an authenticated HTTP GET request to ZAP REST API."""
@@ -162,6 +205,10 @@ class ZapRunner:
         max_duration_mins: int = 2,
     ) -> List[str]:
         """Trigger ZAP spider and poll until completion or timeout."""
+        # Pre-flight DNS/IP authorization; ZAP cannot pin IPs per request, so
+        # Docker network isolation (internal: true) is also required in deployment.
+        self._resolve_and_authorize_url(target_url)
+
         effective_depth = max(0, min(int(max_depth), MAX_SPIDER_DEPTH))
         max_urls = max(1, min(settings.ZAP_SPIDER_MAX_URLS, MAX_SPIDER_URLS))
         params: Dict[str, Any] = {
@@ -242,6 +289,8 @@ class ZapRunner:
                 "Set ZAP_ALLOW_ACTIVE_SCAN=True in settings to permit non-destructive active scanning."
             )
 
+        self._resolve_and_authorize_url(target_url)
+
         params: Dict[str, Any] = {"url": target_url, "recurse": "true", "inScopeOnly": "true"}
         if context_id:
             params["contextId"] = context_id
@@ -291,10 +340,11 @@ class ZapRunner:
         # 1. Reachability
         self.check_reachability()
 
-        # 2. Scope validation
+        # 2. Scope validation (string scope + DNS/IP resolution check)
         is_in_scope, reason = self.scope_manager.check_scope(self.target_id, target_url)
         if not is_in_scope:
             raise ValueError(f"Target URL '{target_url}' is out of scope for ZAP: {reason}")
+        self._resolve_and_authorize_url(target_url)
 
         # 3. Context setup
         ctx_name = f"context_{uuid.uuid4().hex[:8]}"

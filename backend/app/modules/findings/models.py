@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import String, Text, DateTime, ForeignKey, Index, Enum, Float, func
+from sqlalchemy import String, Text, DateTime, ForeignKey, Index, Enum, Float, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -145,7 +145,14 @@ class Finding(Base):
 
     __table_args__ = (
         Index("ix_findings_status_severity", "status", "severity"),
-        Index("ix_findings_assessment_fingerprint", "assessment_id", "fingerprint"),
+        Index(
+            "uq_findings_assessment_fingerprint",
+            "assessment_id",
+            "fingerprint",
+            unique=True,
+            postgresql_where=text("fingerprint IS NOT NULL"),
+            sqlite_where=text("fingerprint IS NOT NULL"),
+        ),
     )
 
 

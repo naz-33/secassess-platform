@@ -1,4 +1,5 @@
 import json
+import socket
 import uuid
 from unittest.mock import patch, MagicMock
 import pytest
@@ -27,7 +28,7 @@ def db_session():
         session.close()
 
 
-def test_curl_runner_blocks_blacklisted_path_without_subprocess(db_session):
+def test_curl_runner_blocks_blacklisted_path_without_subprocess(db_session, admin_user):
     """
     Scope enforcement: A blacklisted path (in_scope=False) must be skipped immediately,
     logged in audit trail (web_probe_rejected), and subprocess must NOT be called for it.
@@ -43,7 +44,7 @@ def test_curl_runner_blocks_blacklisted_path_without_subprocess(db_session):
                 ScopeItemCreate(asset="http://localhost:3000/public", in_scope=True),
                 ScopeItemCreate(asset="http://localhost:3000/admin", in_scope=False, notes="Blacklisted admin"),
             ],
-        )
+        ), user_id=admin_user.id
     )
 
     runner = CurlRunner(db=db_session, target_id=target.id)
@@ -61,7 +62,7 @@ def test_curl_runner_blocks_blacklisted_path_without_subprocess(db_session):
     assert any(log.action == "web_probe_rejected" and "/admin" in str(log.detail) for log in logs)
 
 
-def test_curl_runner_blocks_redirect_hop_to_out_of_scope_host(db_session):
+def test_curl_runner_blocks_redirect_hop_to_out_of_scope_host(db_session, admin_user):
     """
     Manual redirect validation: If a probe encounters a redirect (302) to an out-of-scope host,
     the redirect hop is blocked, logged in audit, and not followed.
@@ -73,7 +74,7 @@ def test_curl_runner_blocks_redirect_hop_to_out_of_scope_host(db_session):
         TargetCreate(
             name=f"Redirect Test Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
 
     runner = CurlRunner(db=db_session, target_id=target.id)
@@ -102,14 +103,14 @@ def test_curl_runner_blocks_redirect_hop_to_out_of_scope_host(db_session):
     assert any(log.action == "web_probe_rejected" and "external-evil.com" in str(log.detail) for log in logs)
 
 
-def test_curl_runner_respects_request_cap(db_session):
+def test_curl_runner_respects_request_cap(db_session, admin_user):
     """Runner stops making requests when max_requests cap is reached."""
     target_service = TargetService(db_session)
     target = target_service.create_target(
         TargetCreate(
             name=f"Cap Test Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
 
     runner = CurlRunner(db=db_session, target_id=target.id, max_requests=2, delay_ms=0)
@@ -131,13 +132,13 @@ def test_curl_runner_respects_request_cap(db_session):
         assert mock_sub.call_count == 2
 
 
-def test_curl_runner_rejects_nonzero_exit_without_http_response(db_session):
+def test_curl_runner_rejects_nonzero_exit_without_http_response(db_session, admin_user):
     target_service = TargetService(db_session)
     target = target_service.create_target(
         TargetCreate(
             name=f"Curl Failure Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
     runner = CurlRunner(db=db_session, target_id=target.id, delay_ms=0)
     failed_process = MagicMock(
@@ -154,13 +155,13 @@ def test_curl_runner_rejects_nonzero_exit_without_http_response(db_session):
     assert "status 7" in transcript
 
 
-def test_curl_runner_keeps_partial_juice_shop_ftp_listing(db_session):
+def test_curl_runner_keeps_partial_juice_shop_ftp_listing(db_session, admin_user):
     target_service = TargetService(db_session)
     target = target_service.create_target(
         TargetCreate(
             name=f"Juice Shop FTP Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
     runner = CurlRunner(db=db_session, target_id=target.id, delay_ms=0)
     listing_body = (
@@ -192,10 +193,10 @@ def test_curl_runner_keeps_partial_juice_shop_ftp_listing(db_session):
     assert "Directory Listing Enabled" in findings[0].title
 
 
-def test_web_assessment_merges_zap_and_curl_and_dedupes_spider_assets(db_session):
+def test_web_assessment_merges_zap_and_curl_and_dedupes_spider_assets(db_session, admin_user):
     target_url = f"https://assessment-{uuid.uuid4().hex[:8]}.test"
     target = TargetService(db_session).create_target(
-        TargetCreate(name=f"Web Assessment {uuid.uuid4().hex[:8]}", base_url=target_url)
+        TargetCreate(name=f"Web Assessment {uuid.uuid4().hex[:8]}", base_url=target_url), user_id=admin_user.id
     )
     assessment = AssessmentService(db_session).create_assessment(
         AssessmentCreate(name=f"Web Assessment {uuid.uuid4().hex[:8]}", target_id=target.id)
@@ -345,3 +346,120 @@ def test_web_assessment_merges_zap_and_curl_and_dedupes_spider_assets(db_session
     assert endpoint_values.count(f"{target_url}/about") == 1
     assert f"{target_url}/api" in endpoint_values
     assert recursive_url not in endpoint_values
+
+
+def test_curl_runner_clamps_bounds_against_settings(db_session, admin_user):
+    """Defense in depth: CurlRunner.__init__ clamps options against server settings."""
+    from app.core.config import settings
+
+    target_service = TargetService(db_session)
+    target = target_service.create_target(
+        TargetCreate(
+            name=f"Clamp Test Target {uuid.uuid4().hex[:6]}",
+            base_url="http://localhost:3000",
+        ), user_id=admin_user.id
+    )
+
+    # Less conservative values are clamped to settings
+    runner_loose = CurlRunner(
+        db=db_session,
+        target_id=target.id,
+        delay_ms=0,
+        max_requests=999999,
+        per_request_timeout=9999,
+        max_body_bytes=999999999,
+    )
+    assert runner_loose.delay_ms == settings.WEB_RATE_LIMIT_DELAY_MS
+    assert runner_loose.max_requests == settings.WEB_MAX_REQUESTS_CAP
+    assert runner_loose.per_request_timeout == settings.WEB_REQUEST_TIMEOUT_SECONDS
+    assert runner_loose.max_body_bytes == settings.WEB_MAX_BODY_SIZE_BYTES
+
+    # More conservative values are preserved
+    runner_strict = CurlRunner(
+        db=db_session,
+        target_id=target.id,
+        delay_ms=settings.WEB_RATE_LIMIT_DELAY_MS + 100,
+        max_requests=5,
+        per_request_timeout=2,
+        max_body_bytes=4096,
+    )
+    assert runner_strict.delay_ms == settings.WEB_RATE_LIMIT_DELAY_MS + 100
+    assert runner_strict.max_requests == 5
+    assert runner_strict.per_request_timeout == 2
+    assert runner_strict.max_body_bytes == 4096
+
+
+def test_curl_runner_pins_resolved_ip_and_logs_audit(db_session, admin_user):
+    """CurlRunner resolves DNS once, pins --resolve host:port:ip, never uses -L, and logs resolved IPs."""
+    target_service = TargetService(db_session)
+    audit_service = AuditService(db_session)
+    target = target_service.create_target(
+        TargetCreate(
+            name=f"Curl Pin Target {uuid.uuid4().hex[:6]}",
+            base_url="https://app.example.com",
+        ), user_id=admin_user.id
+    )
+    runner = CurlRunner(db=db_session, target_id=target.id, delay_ms=0)
+    mock_proc = MagicMock(stdout="HTTP/1.1 200 OK\r\n\r\nOK", stderr="", returncode=0)
+    addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))]
+
+    with patch("socket.getaddrinfo", return_value=addrinfo), patch(
+        "subprocess.run", return_value=mock_proc
+    ) as mock_sub:
+        resp, _ = runner.probe("https://app.example.com/health", follow_redirects=False)
+
+    assert resp is not None
+    cmd = mock_sub.call_args[0][0]
+    assert "-L" not in cmd
+    assert "--resolve" in cmd
+    assert cmd[cmd.index("--resolve") + 1] == "app.example.com:443:93.184.216.34"
+    assert cmd[-1] == "https://app.example.com/health"
+
+    logs = audit_service.list_logs(limit=20)
+    assert any(
+        log.action == "web_probe_resolved" and "93.184.216.34" in str(log.detail)
+        for log in logs
+    )
+
+
+def test_curl_runner_blocks_redirect_to_hostname_resolving_out_of_scope(db_session, admin_user):
+    """Redirect to an in-scope wildcard hostname whose DNS resolves to a forbidden IP is blocked."""
+    target_service = TargetService(db_session)
+    audit_service = AuditService(db_session)
+    target = target_service.create_target(
+        TargetCreate(
+            name=f"Redirect DNS Target {uuid.uuid4().hex[:6]}",
+            base_url="https://app.example.com",
+            scope_items=[ScopeItemCreate(asset="*.example.com", in_scope=True)],
+        ), user_id=admin_user.id
+    )
+    runner = CurlRunner(db=db_session, target_id=target.id, delay_ms=0)
+
+    mock_hop1 = MagicMock(
+        stdout=(
+            "HTTP/1.1 302 Found\r\n"
+            "Location: https://internal.example.com/metadata\r\n"
+            "Content-Length: 0\r\n\r\n"
+        ),
+        stderr="",
+        returncode=0,
+    )
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "app.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("169.254.169.254", 443))]
+
+    with patch("socket.getaddrinfo", side_effect=fake_getaddrinfo), patch(
+        "subprocess.run", return_value=mock_hop1
+    ) as mock_sub:
+        _, transcript = runner.probe("https://app.example.com/start", follow_redirects=True, max_hops=3)
+
+    assert mock_sub.call_count == 1
+    assert "[SCOPE REJECTED]" in transcript
+    assert "internal.example.com" in transcript
+    logs = audit_service.list_logs(limit=20)
+    assert any(
+        log.action == "web_probe_rejected" and "internal.example.com" in str(log.detail)
+        for log in logs
+    )

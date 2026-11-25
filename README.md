@@ -192,6 +192,21 @@ docker compose --profile targets up --build -d
 
 Juice Shop is available at [http://localhost:3000](http://localhost:3000). Within Docker, the backend reaches ZAP at `http://zap:8080`; from a host-run backend, use `http://localhost:8080`. Only test systems you own or are explicitly authorized to assess. All included target applications are intentionally vulnerable and strictly meant for local practice.
 
+### Network isolation
+
+- `zap` and `kdrama-db` sit only on `scan_net` (`secassess_scan_net`, `internal: true`, subnet `172.30.0.0/24`), so ZAP has no internet route and cannot reach external targets.
+- `backend` sits on both `secassess_net` (for database access and outbound Gemini API calls) and `scan_net` (to reach ZAP and the local targets).
+- Both local targets (`juice-shop` and `kdrama-target`) sit on `scan_net` and `browse_net` (`secassess_browse_net`) so host browsers can access them on `127.0.0.1:3000` and `127.0.0.1:8081`. Because `browse_net` is a standard bridge network, both targets retain outbound internet access (a documented limitation).
+- `172.30.0.0/24` is the registered in-scope CIDR for the local targets on `scan_net`.
+
+Verify network isolation with:
+
+```bash
+docker compose exec zap sh -c "curl -m 5 https://example.com"           # must fail
+docker compose exec backend curl -m 5 http://juice-shop:3000             # must work
+docker compose exec backend curl -m 5 http://zap:8080                    # must work
+```
+
 ### Stop or inspect the application
 
 Follow the service logs:

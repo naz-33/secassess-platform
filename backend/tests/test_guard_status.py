@@ -42,7 +42,7 @@ def test_no_creation_path_can_set_confirmed():
         db.close()
 
 
-def test_ai_and_tool_findings_always_start_unverified():
+def test_ai_and_tool_findings_always_start_unverified(admin_user):
     """Findings from tools or AI must always start unverified."""
     db = SessionLocal()
     try:
@@ -51,7 +51,7 @@ def test_ai_and_tool_findings_always_start_unverified():
         fs = FindingService(db)
 
         target = ts.create_target(
-            TargetCreate(name=f"Guard Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000")
+            TargetCreate(name=f"Guard Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000"), user_id=admin_user.id
         )
         assessment = as_svc.create_assessment(
             AssessmentCreate(name="Guard Assessment", target_id=target.id)
@@ -97,7 +97,7 @@ def test_rerunning_assessment_does_not_reset_verified_status(assessor_user):
         vs = VerificationService(db)
 
         target = ts.create_target(
-            TargetCreate(name=f"Preserve Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000")
+            TargetCreate(name=f"Preserve Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000"), user_id=assessor_user.id
         )
         assessment = as_svc.create_assessment(
             AssessmentCreate(name="Preserve Assessment", target_id=target.id, created_by=assessor_user.id)

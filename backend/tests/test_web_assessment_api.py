@@ -84,13 +84,14 @@ def test_web_assessment_api_full_lifecycle(client: TestClient):
         ],
         "include_zap": True,
         "options": {
-            "delay_ms": 0,
+            "delay_ms": 250,
             "max_requests": 20,
         },
     }
 
     with (
         patch("subprocess.run", return_value=mock_curl),
+        patch("app.modules.web_assessment.runners.curl_runner.time.sleep"),
         patch(
             "app.modules.web_assessment.service.TlsRunner.check_tls",
             return_value={"https_available": False, "raw_output": "TLS probe mocked"},
@@ -314,7 +315,7 @@ def test_zap_session_finding_requires_observed_set_cookie(
             json={
                 "categories": ["session_management"],
                 "include_zap": True,
-                "options": {"delay_ms": 0, "max_requests": 5},
+                "options": {"delay_ms": 250, "max_requests": 5},
             },
         )
 
@@ -338,3 +339,138 @@ def test_zap_session_finding_requires_observed_set_cookie(
         assert len(evidence) == 1
         assert "unsupported alert evidence" in evidence[0]["content"]
         assert f"Set-Cookie: {set_cookie}" in evidence[0]["content"]
+
+
+@pytest.mark.parametrize(
+    "invalid_options",
+    [
+        {"delay_ms": 0},
+        {"delay_ms": -5},
+        {"delay_ms": "0"},
+        {"delay_ms": True},
+        {"max_requests": 100000},
+        {"max_requests": 0},
+        {"max_requests": -5},
+        {"max_requests": True},
+        {"max_requests": "10"},
+        {"per_request_timeout": 0},
+        {"per_request_timeout": 999},
+        {"per_request_timeout": False},
+        {"max_body_bytes": 0},
+        {"max_body_bytes": 999999999},
+        {"max_body_bytes": "2000"},
+        {"unknown_key": 123},
+    ],
+)
+def test_web_assessment_rejects_unbounded_and_invalid_options(client: TestClient, invalid_options: dict):
+    """Direct API callers cannot bypass web assessment option bounds or pass invalid types/keys."""
+    target_res = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"Web Opts Target {uuid.uuid4().hex[:6]}",
+            "base_url": "http://localhost:3000",
+        },
+    )
+    assert target_res.status_code == 201
+    ass_res = client.post(
+        "/api/v1/assessments/",
+        json={"name": "Web Opts Validation", "target_id": target_res.json()["id"]},
+    )
+    assert ass_res.status_code == 201
+    assessment_id = ass_res.json()["id"]
+
+    res = client.post(
+        f"/api/v1/assessments/{assessment_id}/web-assessment",
+        json={"options": invalid_options},
+    )
+    assert res.status_code == 422
+
+
+def test_web_assessment_passes_timeout_and_body_bytes_to_curl_runner(client: TestClient):
+    """Valid conservative per_request_timeout and max_body_bytes reach CurlRunner and curl argv."""
+    target_res = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"Web Runner Opts Target {uuid.uuid4().hex[:6]}",
+            "base_url": "http://localhost:3000",
+        },
+    )
+    assert target_res.status_code == 201
+    ass_res = client.post(
+        "/api/v1/assessments/",
+        json={"name": "Web Runner Opts", "target_id": target_res.json()["id"]},
+    )
+    assert ass_res.status_code == 201
+    assessment_id = ass_res.json()["id"]
+
+    mock_proc = MagicMock()
+    mock_proc.stdout = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html></html>"
+    mock_proc.stderr = ""
+    mock_proc.returncode = 0
+
+    with (
+        patch("subprocess.run", return_value=mock_proc) as mock_sub,
+        patch("app.modules.web_assessment.runners.curl_runner.time.sleep"),
+        patch(
+            "app.modules.web_assessment.service.TlsRunner.check_tls",
+            return_value={"https_available": False, "raw_output": "TLS probe mocked"},
+        ),
+    ):
+        res = client.post(
+            f"/api/v1/assessments/{assessment_id}/web-assessment",
+            json={
+                "categories": ["security_headers"],
+                "options": {
+                    "delay_ms": 300,
+                    "max_requests": 5,
+                    "per_request_timeout": 4,
+                    "max_body_bytes": 1024,
+                },
+            },
+        )
+        assert res.status_code == 202
+
+    assert mock_sub.called
+    cmd = mock_sub.call_args_list[0].args[0]
+    assert "--max-time" in cmd
+    assert cmd[cmd.index("--max-time") + 1] == "4"
+    assert "--max-filesize" in cmd
+    assert cmd[cmd.index("--max-filesize") + 1] == "1024"
+    assert mock_sub.call_args_list[0].kwargs["timeout"] == 9
+
+
+def test_nmap_scan_endpoint_rejects_unbounded_custom_ports_and_accepts_valid_list(client: TestClient):
+    """Direct API calls to POST /assessments/{id}/scans enforce Nmap custom port bounds."""
+    target_res = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"Nmap API Target {uuid.uuid4().hex[:6]}",
+            "base_url": "http://127.0.0.1:3000",
+        },
+    )
+    assert target_res.status_code == 201
+    ass_res = client.post(
+        "/api/v1/assessments/",
+        json={"name": "Nmap API Validation", "target_id": target_res.json()["id"]},
+    )
+    assert ass_res.status_code == 201
+    assessment_id = ass_res.json()["id"]
+
+    for bad_ports in ["1-65535", "0-99999999", "1-500,501-1001"]:
+        bad_res = client.post(
+            f"/api/v1/assessments/{assessment_id}/scans",
+            json={"tool": "nmap", "options": {"ports": bad_ports}},
+        )
+        assert bad_res.status_code == 422
+
+    mock_nmap_proc = MagicMock(
+        stdout="<nmaprun><host><status state='up'/></host></nmaprun>",
+        stderr="",
+        returncode=0,
+    )
+    with patch("subprocess.run", return_value=mock_nmap_proc):
+        ok_res = client.post(
+            f"/api/v1/assessments/{assessment_id}/scans",
+            json={"tool": "nmap", "options": {"ports": "80,80,443"}},
+        )
+        assert ok_res.status_code == 202

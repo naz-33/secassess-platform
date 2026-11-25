@@ -30,7 +30,7 @@ def create_target(
 ) -> TargetRead:
     """Create a new authorized assessment target with scope boundaries."""
     service = TargetService(db)
-    return service.create_target(target_in)
+    return service.create_target(target_in, user_id=current_user.id)
 
 
 @router.get("", response_model=List[TargetRead])
@@ -69,7 +69,7 @@ def update_target(
 ) -> TargetRead:
     """Update assessment target metadata."""
     service = TargetService(db)
-    target = service.update_target(target_id, target_in)
+    target = service.update_target(target_id, target_in, user_id=current_user.id)
     if not target:
         raise NotFoundException(resource="Target", identifier=target_id)
     return target
@@ -83,7 +83,7 @@ def delete_target(
 ) -> None:
     """Delete an assessment target and associated scope items."""
     service = TargetService(db)
-    success = service.delete_target(target_id)
+    success = service.delete_target(target_id, user_id=current_user.id)
     if not success:
         raise NotFoundException(resource="Target", identifier=target_id)
 
@@ -110,7 +110,7 @@ def add_target_scope_item(
 ) -> ScopeItemRead:
     """Add a new scope boundary rule (asset URL, host, IP, or CIDR) to a target."""
     service = TargetService(db)
-    return service.add_scope_item(target_id, scope_in)
+    return service.add_scope_item(target_id, scope_in, user_id=current_user.id)
 
 
 @router.delete("/{target_id}/scope/{scope_item_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -122,7 +122,7 @@ def delete_target_scope_item(
 ) -> None:
     """Remove a specific scope item from a target."""
     service = TargetService(db)
-    success = service.delete_scope_item(target_id, scope_item_id)
+    success = service.delete_scope_item(target_id, scope_item_id, user_id=current_user.id)
     if not success:
         raise NotFoundException(resource="ScopeItem", identifier=scope_item_id)
 
@@ -139,4 +139,4 @@ def validate_asset_scope(
     Returns status and diagnostic explanation.
     """
     service = TargetService(db)
-    return service.check_scope(target_id, validation_req.asset)
+    return service.check_scope(target_id, validation_req.asset, user_id=current_user.id)

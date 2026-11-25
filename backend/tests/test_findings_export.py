@@ -31,7 +31,7 @@ def export_test_data(admin_user):
                 scope_items=[
                     ScopeItemCreate(asset="http://127.0.0.1:8000", in_scope=True),
                 ],
-            )
+            ), user_id=admin_user.id
         )
 
         assessment_service = AssessmentService(db)

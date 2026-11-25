@@ -62,7 +62,7 @@ def complex_report_assessment(admin_user, assessor_user):
                     ScopeItemCreate(asset="127.0.0.1", in_scope=True, notes="In scope host"),
                     ScopeItemCreate(asset="http://127.0.0.1:9999", in_scope=False, notes="Out of scope admin interface"),
                 ],
-            )
+            ), user_id=admin_user.id
         )
 
         assessment_service = AssessmentService(db)
@@ -485,7 +485,7 @@ def test_unapproved_or_rejected_ai_summary_excluded(assessor_client, admin_user)
     """Test that rejected or unapproved executive summary is excluded and report states so."""
     db = SessionLocal()
     try:
-        t = TargetService(db).create_target(TargetCreate(name="No AI Target", base_url="http://127.0.0.1:9000"))
+        t = TargetService(db).create_target(TargetCreate(name="No AI Target", base_url="http://127.0.0.1:9000"), user_id=admin_user.id)
         a = AssessmentService(db).create_assessment(AssessmentCreate(name="No AI Assessment", target_id=t.id), user_id=admin_user.id)
 
         # Rejected summary
@@ -522,7 +522,7 @@ def test_empty_state_report_generation(assessor_client, admin_user):
     """
     db = SessionLocal()
     try:
-        t = TargetService(db).create_target(TargetCreate(name="Empty Target", base_url="http://127.0.0.1:9001"))
+        t = TargetService(db).create_target(TargetCreate(name="Empty Target", base_url="http://127.0.0.1:9001"), user_id=admin_user.id)
         a = AssessmentService(db).create_assessment(AssessmentCreate(name="Empty Assessment", target_id=t.id), user_id=admin_user.id)
 
         res = assessor_client.post(f"/api/v1/assessments/{a.id}/reports", json={"format": "docx"})

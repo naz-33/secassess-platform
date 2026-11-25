@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import uuid
@@ -20,6 +21,7 @@ from app.core.exceptions import (
 from app.modules.audit import AuditService
 from app.modules.assessments import AssessmentService
 from app.modules.auth import User
+from app.modules.findings.cvss import validate_and_resolve_cvss
 from app.modules.findings.models import (
     Finding,
     Evidence,
@@ -41,6 +43,9 @@ from app.modules.findings.schemas import (
     FindingsSummary,
     compute_risk_rating,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def compute_finding_fingerprint(
@@ -189,7 +194,7 @@ class FindingService:
             remediation=finding_in.remediation,
             fingerprint=fingerprint,
         )
-        created = self.repository.create(finding)
+        created, _ = self.repository.get_or_create_by_fingerprint(finding)
         return self._to_read_dto(created)
 
     def ingest_candidate(
@@ -210,6 +215,8 @@ class FindingService:
         evidence_content: Optional[str] = None,
         evidence_label: Optional[str] = None,
         evidence_type: EvidenceType = EvidenceType.REQUEST_RESPONSE,
+        artifact_file_path: Optional[str] = None,
+        artifact_sha256: Optional[str] = None,
     ) -> Finding:
         """
         Ingest a candidate finding with automatic deduplication.
@@ -233,6 +240,25 @@ class FindingService:
             # Preserve existing status and severity fields! Do not reset!
             target_finding = existing
         else:
+            resolved_score: Optional[float] = None
+            resolved_vector: Optional[str] = None
+            if cvss_vector is not None or cvss_score is not None:
+                try:
+                    resolved_score, resolved_vector, _ = validate_and_resolve_cvss(
+                        severity=severity,
+                        cvss_score=cvss_score,
+                        cvss_vector=cvss_vector,
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "Dropping invalid CVSS fields during ingest_candidate for assessment=%s title=%r: %s",
+                        assessment_id,
+                        title,
+                        exc,
+                    )
+                    resolved_score = None
+                    resolved_vector = None
+
             finding = Finding(
                 assessment_id=assessment_id,
                 scan_id=scan_id,
@@ -245,8 +271,8 @@ class FindingService:
                 severity_justification=None,
                 verified_by=None,
                 verified_at=None,
-                cvss_score=cvss_score,
-                cvss_vector=cvss_vector,
+                cvss_score=resolved_score,
+                cvss_vector=resolved_vector,
                 wstg_id=wstg_id,
                 owasp_top10=owasp_top10,
                 cwe=cwe,
@@ -256,7 +282,7 @@ class FindingService:
                 remediation=remediation,
                 fingerprint=fingerprint,
             )
-            target_finding = self.repository.create(finding)
+            target_finding, _ = self.repository.get_or_create_by_fingerprint(finding)
 
         if evidence_content:
             evidence = Evidence(
@@ -267,6 +293,19 @@ class FindingService:
                 label=evidence_label or f"Evidence for {title}",
             )
             self.repository.add_evidence(evidence)
+
+        if artifact_file_path:
+            raw_evidence = Evidence(
+                finding_id=target_finding.id,
+                scan_id=scan_id,
+                type=EvidenceType.OUTPUT,
+                content=None,
+                file_path=artifact_file_path,
+                sha256=artifact_sha256,
+                original_filename=Path(artifact_file_path).name,
+                label=f"Raw tool output for {title}",
+            )
+            self.repository.add_evidence(raw_evidence)
 
         refreshed = self.repository.get_by_id(target_finding.id)
         return refreshed or target_finding
@@ -338,7 +377,10 @@ class FindingService:
                 remediation=remediation,
                 fingerprint=fingerprint,
             )
-            target_finding = self.repository.create(finding)
+            target_finding, created = self.repository.get_or_create_by_fingerprint(finding)
+            if not created and not target_finding.ai_analysis_id:
+                target_finding.ai_analysis_id = ai_analysis_id
+                self.repository.update(target_finding)
 
         # Link cited evidence if provided
         if evidence_ids:
@@ -469,10 +511,13 @@ class FindingService:
         # Update finding fields (original_severity stays untouched!)
         finding.final_severity = new_severity
         finding.severity_justification = override_in.justification.strip()
-        if override_in.cvss_score is not None:
-            finding.cvss_score = override_in.cvss_score
         if override_in.cvss_vector is not None:
+            finding.cvss_score = override_in.cvss_score
             finding.cvss_vector = override_in.cvss_vector
+        else:
+            # Clear stale CVSS values when overriding without a new valid vector
+            finding.cvss_score = None
+            finding.cvss_vector = None
 
         self.repository.update(finding)
 
@@ -627,11 +672,20 @@ class FindingService:
         if not path.exists() or not path.is_file():
             raise NotFoundException("Evidence file on disk", evidence_id)
 
-        # Prevent path traversal outside UPLOAD_DIR
-        upload_dir = Path(settings.UPLOAD_DIR).resolve()
-        try:
-            path.relative_to(upload_dir)
-        except ValueError:
+        # Prevent path traversal outside UPLOAD_DIR or ARTIFACT_DIR
+        allowed_roots = (
+            Path(settings.UPLOAD_DIR).resolve(),
+            Path(settings.ARTIFACT_DIR).resolve(),
+        )
+        in_allowed_root = False
+        for root in allowed_roots:
+            try:
+                path.relative_to(root)
+                in_allowed_root = True
+                break
+            except ValueError:
+                continue
+        if not in_allowed_root:
             raise ForbiddenException("Invalid evidence file path access.")
 
         # Determine content type
@@ -645,7 +699,7 @@ class FindingService:
             content_type = "image/webp"
         elif ext == ".pdf":
             content_type = "application/pdf"
-        elif ext == ".txt":
+        elif ext in (".txt", ".stderr"):
             content_type = "text/plain"
 
         filename = evidence.original_filename or f"evidence_{evidence.id}{ext}"

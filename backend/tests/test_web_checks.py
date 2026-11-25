@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 from app.modules.findings import FindingSeverity
 from app.modules.web_assessment.types import CapturedResponse
-from app.modules.web_assessment.runners.curl_runner import parse_raw_curl_response
+from app.modules.web_assessment.parsers.curl_parser import parse_raw_curl_response
 from app.modules.web_assessment.runners.tls_runner import TlsRunner
 from app.modules.web_assessment.checks.security_headers import (
     check_security_headers,

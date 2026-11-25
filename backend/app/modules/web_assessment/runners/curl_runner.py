@@ -1,4 +1,5 @@
 import re
+import shlex
 import subprocess
 import time
 import urllib.parse
@@ -6,86 +7,18 @@ import uuid
 from typing import Optional, Tuple, List, Dict
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.exceptions import ScopeViolationException
 from app.modules.audit import AuditService
+from app.modules.scans import save_raw_artifact, to_raw_bytes
 from app.modules.targets import ScopeManager
+from app.modules.web_assessment.parsers.curl_parser import (
+    DEFAULT_USER_AGENT,
+    parse_raw_curl_response,
+)
 from app.modules.web_assessment.types import CapturedResponse
 
 ALLOWED_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
-DEFAULT_USER_AGENT = "SecAssess/1.0 Web Security Scanner"
 CURL_PARTIAL_FILE_EXIT_CODE = 18
-
-
-def parse_raw_curl_response(
-    raw_output: str,
-    url: str,
-    method: str,
-    elapsed_ms: float,
-    max_body_bytes: int = 200000,
-    response_truncated: bool = False,
-) -> CapturedResponse:
-    """
-    Parse curl's '-i' stdout output (headers + body) into a structured CapturedResponse.
-    Preserves all header casing, order, and duplicates.
-    """
-    # Normalize CRLF
-    normalized = raw_output.replace("\r\n", "\n")
-
-    # If curl output contains 100 Continue blocks, find the final HTTP header section
-    header_blocks = normalized.split("\n\n", 1)
-    status_code = 200
-    headers_list: List[Tuple[str, str]] = []
-    body = ""
-    truncated = response_truncated
-
-    if len(header_blocks) >= 1:
-        headers_section = header_blocks[0]
-        body_section = header_blocks[1] if len(header_blocks) > 1 else ""
-
-        # Check for multiple header blocks (e.g. HTTP/1.1 100 Continue)
-        while headers_section.startswith("HTTP/") and "\nHTTP/" in body_section:
-            next_header, remaining = body_section.split("\nHTTP/", 1)
-            headers_section = "HTTP/" + remaining.split("\n\n", 1)[0]
-            body_section = remaining.split("\n\n", 1)[1] if "\n\n" in remaining else ""
-
-        lines = headers_section.split("\n")
-        first_line = lines[0].strip()
-        status_match = re.search(r"HTTP/\S+\s+(\d{3})", first_line)
-        if status_match:
-            status_code = int(status_match.group(1))
-
-        for line in lines[1:]:
-            if ":" in line:
-                k, v = line.split(":", 1)
-                headers_list.append((k.strip(), v.strip()))
-
-        body = body_section
-        if len(body.encode("utf-8", errors="ignore")) > max_body_bytes:
-            body = body[:max_body_bytes]
-            truncated = True
-
-    # Assemble raw transcript
-    parsed_url = urllib.parse.urlsplit(url)
-    host = parsed_url.netloc
-    path = parsed_url.path or "/"
-    if parsed_url.query:
-        path = f"{path}?{parsed_url.query}"
-
-    req_headers = f"> {method} {path} HTTP/1.1\n> Host: {host}\n> User-Agent: {DEFAULT_USER_AGENT}\n> Accept: */*\n"
-    raw_transcript = f"{req_headers}\n< {first_line if 'first_line' in locals() else 'HTTP/1.1 ' + str(status_code)}\n"
-    for k, v in headers_list:
-        raw_transcript += f"< {k}: {v}\n"
-    raw_transcript += f"\n{body}"
-
-    return CapturedResponse(
-        url=url,
-        method=method,
-        status=status_code,
-        headers=headers_list,
-        body=body,
-        elapsed_ms=elapsed_ms,
-        raw_text=raw_transcript,
-        truncated=truncated,
-    )
 
 
 class CurlRunner:
@@ -104,14 +37,26 @@ class CurlRunner:
         user_id: Optional[uuid.UUID] = None,
         delay_ms: Optional[int] = None,
         max_requests: Optional[int] = None,
+        per_request_timeout: Optional[int] = None,
+        max_body_bytes: Optional[int] = None,
+        scan_id: Optional[uuid.UUID] = None,
     ):
         self.db = db
         self.target_id = target_id
         self.user_id = user_id
+        self.scan_id = scan_id
         self.scope_manager = ScopeManager(db)
         self.audit_service = AuditService(db)
-        self.delay_ms = delay_ms if delay_ms is not None else settings.WEB_RATE_LIMIT_DELAY_MS
-        self.max_requests = max_requests if max_requests is not None else settings.WEB_MAX_REQUESTS_CAP
+
+        raw_delay = delay_ms if delay_ms is not None else settings.WEB_RATE_LIMIT_DELAY_MS
+        raw_max_requests = max_requests if max_requests is not None else settings.WEB_MAX_REQUESTS_CAP
+        raw_timeout = per_request_timeout if per_request_timeout is not None else settings.WEB_REQUEST_TIMEOUT_SECONDS
+        raw_max_body = max_body_bytes if max_body_bytes is not None else settings.WEB_MAX_BODY_SIZE_BYTES
+
+        self.delay_ms = max(int(raw_delay), settings.WEB_RATE_LIMIT_DELAY_MS)
+        self.max_requests = max(1, min(int(raw_max_requests), settings.WEB_MAX_REQUESTS_CAP))
+        self.per_request_timeout = max(1, min(int(raw_timeout), settings.WEB_REQUEST_TIMEOUT_SECONDS))
+        self.max_body_bytes = max(1, min(int(raw_max_body), settings.WEB_MAX_BODY_SIZE_BYTES))
         self.requests_count = 0
 
     def probe(
@@ -161,13 +106,57 @@ class CurlRunner:
                 )
                 return last_response, overall_transcript
 
+            # 2b. Resolve DNS once and authorize all resolved IPs before pinning
+            parsed_current = urllib.parse.urlsplit(current_url)
+            target_host = parsed_current.hostname or ""
+            target_port = parsed_current.port or (
+                443 if parsed_current.scheme.lower() == "https" else 80
+            )
+            try:
+                resolved_ips = self.scope_manager.resolve_and_authorize(
+                    self.target_id,
+                    target_host,
+                    target_port,
+                )
+            except ScopeViolationException as exc:
+                rejection_msg = f"[SCOPE REJECTED] DNS resolution blocked for '{current_url}': {exc.detail}"
+                overall_transcript += f"{rejection_msg}\n"
+                self.audit_service.log_action(
+                    action="web_probe_rejected",
+                    detail={
+                        "target_id": str(self.target_id),
+                        "url": current_url,
+                        "host": target_host,
+                        "port": target_port,
+                        "reason": str(exc.detail),
+                    },
+                    user_id=self.user_id,
+                )
+                return last_response, overall_transcript
+
+            pinned_ip = resolved_ips[0]
+            formatted_ip = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+            resolve_entry = f"{target_host}:{target_port}:{formatted_ip}"
+            self.audit_service.log_action(
+                action="web_probe_resolved",
+                detail={
+                    "target_id": str(self.target_id),
+                    "url": current_url,
+                    "host": target_host,
+                    "port": target_port,
+                    "resolved_ips": resolved_ips,
+                    "pinned_ip": pinned_ip,
+                },
+                user_id=self.user_id,
+            )
+
             # 3. Rate limit delay
             if self.requests_count > 0 and self.delay_ms > 0:
                 time.sleep(self.delay_ms / 1000.0)
 
-            # 4. Prepare command arguments (Strict allow-list, shell=False)
-            per_req_timeout = settings.WEB_REQUEST_TIMEOUT_SECONDS
-            max_size = settings.WEB_MAX_BODY_SIZE_BYTES
+            # 4. Prepare command arguments (Strict allow-list, shell=False, never -L)
+            per_req_timeout = self.per_request_timeout
+            max_size = self.max_body_bytes
 
             cmd: List[str] = [
                 settings.CURL_PATH,
@@ -177,6 +166,8 @@ class CurlRunner:
                 str(per_req_timeout),
                 "--max-filesize",
                 str(max_size),
+                "--resolve",
+                resolve_entry,
                 "-A",
                 DEFAULT_USER_AGENT,
                 "-X",
@@ -198,17 +189,22 @@ class CurlRunner:
                     cmd,
                     shell=False,
                     capture_output=True,
-                    text=True,
+                    text=False,
                     timeout=per_req_timeout + 5,
                 )
+                raw_stdout_bytes = to_raw_bytes(proc.stdout)
+                raw_stderr_bytes = to_raw_bytes(proc.stderr)
+                decoded_stdout = raw_stdout_bytes.decode("utf-8", errors="replace")
+                decoded_stderr = raw_stderr_bytes.decode("utf-8", errors="replace")
+
                 has_http_response = bool(
-                    re.search(r"^HTTP/\S+\s+\d{3}", proc.stdout or "", re.MULTILINE)
+                    re.search(r"^HTTP/\S+\s+\d{3}", decoded_stdout, re.MULTILINE)
                 )
                 partial_transfer = (
                     proc.returncode == CURL_PARTIAL_FILE_EXIT_CODE and has_http_response
                 )
                 if proc.returncode != 0 and not partial_transfer:
-                    error_detail = (proc.stderr or proc.stdout or "").strip()
+                    error_detail = (decoded_stderr or decoded_stdout).strip()
                     err_msg = (
                         f"[CURL ERROR] Curl exited with status {proc.returncode} "
                         f"for '{current_url}'."
@@ -217,9 +213,9 @@ class CurlRunner:
                         err_msg += f" {error_detail}"
                     overall_transcript += f"{err_msg}\n"
                     return None, overall_transcript
-                raw_out = proc.stdout or ""
-                if proc.stderr:
-                    overall_transcript += f"[CURL STDERR] {proc.stderr.strip()}\n"
+                raw_out = decoded_stdout
+                if decoded_stderr:
+                    overall_transcript += f"[CURL STDERR] {decoded_stderr.strip()}\n"
                 if partial_transfer:
                     overall_transcript += (
                         "[CURL PARTIAL RESPONSE] Transfer ended before the declared "
@@ -247,6 +243,20 @@ class CurlRunner:
                 max_body_bytes=max_size,
                 response_truncated=partial_transfer,
             )
+            if self.scan_id is not None:
+                artifact = save_raw_artifact(
+                    self.db,
+                    scan_id=self.scan_id,
+                    tool="curl",
+                    stdout_bytes=raw_stdout_bytes,
+                    stderr_bytes=raw_stderr_bytes,
+                    command=" ".join(shlex.quote(arg) for arg in cmd),
+                    target_url=current_url,
+                    exit_code=proc.returncode,
+                    duration_ms=t_elapsed,
+                )
+                captured.artifact_file_path = artifact.file_path
+                captured.artifact_sha256 = artifact.sha256
             last_response = captured
             overall_transcript += f"\n--- Probe Transcript for {current_url} ---\n{captured.raw_text}\n"
 

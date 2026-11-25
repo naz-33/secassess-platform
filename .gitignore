@@ -62,3 +62,8 @@ Thumbs.db
 # Platform generated outputs
 reports_output/
 
+# Runtime generated data
+artifacts/
+uploads/
+backend/uploads/
+reports_storage/

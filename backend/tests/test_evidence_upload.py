@@ -21,7 +21,7 @@ def finding_for_upload(assessor_user):
         fs = FindingService(db)
 
         target = ts.create_target(
-            TargetCreate(name=f"Upload Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000")
+            TargetCreate(name=f"Upload Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000"), user_id=assessor_user.id
         )
         assessment = as_svc.create_assessment(
             AssessmentCreate(name="Upload Assessment", target_id=target.id, created_by=assessor_user.id)

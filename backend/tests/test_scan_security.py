@@ -80,7 +80,13 @@ def test_nmap_adapter_safe_command_generation():
         {"arbitrary_flag": "-A"},
         {"timing": "-T5"},  # Aggressive T5 is disallowed
         {"top_ports": 99999},  # Exceeds max 1000
+        {"top_ports": True},  # Bool is not a valid top_ports int
         {"ports": "80; rm -rf /"},  # Metacharacters in port range
+        {"ports": "1-65535"},  # Exceeds NMAP_MAX_CUSTOM_PORTS
+        {"ports": "0-99999999"},  # Out of valid port bounds 1-65535
+        {"ports": "443-80"},  # Inverted range
+        {"ports": "1-600,601-1001"},  # Total unique ports > 1000
+        {"ports": ",".join(["80"] * 1001)},  # Excessive item count
         {"script": "vuln"},  # Scripts disallowed in safe profile
     ],
 )
@@ -89,6 +95,23 @@ def test_nmap_adapter_disallowed_options_rejected(disallowed_options: dict):
     adapter = NmapAdapter()
     with pytest.raises(ValueError):
         adapter.build_command("localhost", disallowed_options)
+
+
+def test_nmap_adapter_custom_ports_deduplicates_overlaps_and_allows_small_list():
+    """Verify overlapping/duplicate custom ports are deduplicated and valid small lists succeed."""
+    adapter = NmapAdapter()
+
+    argv_dups = adapter.build_command("127.0.0.1", {"ports": "80,80,80"})
+    assert "-p" in argv_dups
+    assert argv_dups[argv_dups.index("-p") + 1] == "80,80,80"
+
+    argv_overlap = adapter.build_command("127.0.0.1", {"ports": "1-600,300-1000"})
+    assert "-p" in argv_overlap
+    assert argv_overlap[argv_overlap.index("-p") + 1] == "1-600,300-1000"
+
+    argv_small = adapter.build_command("127.0.0.1", {"ports": "22,80,443,8000-8010"})
+    assert "-p" in argv_small
+    assert argv_small[argv_small.index("-p") + 1] == "22,80,443,8000-8010"
 
 
 def test_dns_adapter_disallowed_record_types():

@@ -1,7 +1,8 @@
 import ipaddress
 import re
+import socket
 import uuid
-from typing import Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
@@ -77,11 +78,22 @@ def _matches_rule(candidate: dict, rule_str: str) -> bool:
     if not rule.get("valid"):
         return False
 
-    # 1. CIDR Network Rule vs Candidate IP
+    # 1. CIDR Network Rule vs Candidate IP or resolved IPs
     if rule.get("is_network"):
         cand_ip = candidate.get("ip")
         if cand_ip:
             return cand_ip in rule["network"]
+        for raw_ip in candidate.get("resolved_ips") or ():
+            try:
+                ip_obj = (
+                    raw_ip
+                    if isinstance(raw_ip, (ipaddress.IPv4Address, ipaddress.IPv6Address))
+                    else ipaddress.ip_address(str(raw_ip))
+                )
+                if ip_obj in rule["network"]:
+                    return True
+            except ValueError:
+                continue
         return False
 
     cand_host = candidate.get("hostname", "")
@@ -200,6 +212,129 @@ class ScopeManager:
         if not in_scope:
             raise ScopeViolationException(asset=asset, target_id=target_id)
         return True
+
+    def _is_ip_explicitly_in_scope(
+        self,
+        ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address,
+        port: Optional[int],
+        base_url: str,
+        scope_items: Sequence[ScopeItem],
+    ) -> bool:
+        """Return True if an IP is explicitly authorized by an in-scope rule or target base_url."""
+        ip_candidate = {
+            "raw": str(ip_obj),
+            "valid": True,
+            "hostname": str(ip_obj).lower(),
+            "port": port,
+            "path": "",
+            "ip": ip_obj,
+            "resolved_ips": [ip_obj],
+            "is_network": False,
+        }
+        for item in scope_items:
+            if item.in_scope:
+                rule = _parse_asset(item.asset)
+                if rule.get("valid") and _matches_rule(ip_candidate, item.asset):
+                    return True
+
+        if base_url:
+            base_rule = _parse_asset(base_url)
+            if base_rule.get("valid"):
+                # Match host/IP/port against base_url without requiring a URL path match
+                base_host = base_rule.get("hostname", "")
+                cand_host = str(ip_obj).lower()
+                host_match = (
+                    cand_host == base_host
+                    or (cand_host in LOOPBACK_HOSTS and base_host in LOOPBACK_HOSTS)
+                )
+                if host_match:
+                    if base_rule.get("port") is None or base_rule.get("port") == port:
+                        return True
+        return False
+
+    def resolve_and_authorize(
+        self,
+        target_id: uuid.UUID,
+        host: str,
+        port: Optional[int] = None,
+    ) -> List[str]:
+        """
+        Resolve all A/AAAA records for host once and validate every resolved IP.
+
+        Fails closed on DNS errors, empty results, out-of-scope IPs/CIDRs,
+        or forbidden IP ranges (loopback, link-local, multicast, unspecified;
+        private ranges only allowed if explicitly in scope).
+        """
+        target = self.db.query(Target).filter(Target.id == target_id).first()
+        if not target:
+            raise NotFoundException(resource="Target", identifier=target_id)
+
+        clean_host = (host or "").strip().strip("[]")
+        if not clean_host:
+            raise ScopeViolationException(asset=host or "", target_id=target_id)
+
+        try:
+            addrinfo = socket.getaddrinfo(
+                clean_host,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            )
+        except (socket.gaierror, OSError, ValueError):
+            raise ScopeViolationException(asset=clean_host, target_id=target_id)
+
+        resolved_ips: List[str] = []
+        seen_ips: set[str] = set()
+        for family, _, _, _, sockaddr in addrinfo:
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            raw_ip = sockaddr[0].split("%")[0]
+            try:
+                ip_obj = ipaddress.ip_address(raw_ip)
+            except ValueError:
+                raise ScopeViolationException(asset=raw_ip, target_id=target_id)
+
+            normalized = str(ip_obj)
+            if normalized not in seen_ips:
+                seen_ips.add(normalized)
+                resolved_ips.append(normalized)
+
+        if not resolved_ips:
+            raise ScopeViolationException(asset=clean_host, target_id=target_id)
+
+        for ip_str in resolved_ips:
+            ip_obj = ipaddress.ip_address(ip_str)
+            ip_candidate = {
+                "raw": ip_str,
+                "valid": True,
+                "hostname": ip_str.lower(),
+                "port": port,
+                "path": "",
+                "ip": ip_obj,
+                "resolved_ips": [ip_obj],
+                "is_network": False,
+            }
+
+            # 1. Explicit out-of-scope IP/CIDR restrictions always win
+            for item in target.scope_items:
+                if not item.in_scope and _matches_rule(ip_candidate, item.asset):
+                    raise ScopeViolationException(asset=ip_str, target_id=target_id)
+
+            # 2. Always reject link-local (incl. 169.254.169.254), multicast, unspecified
+            if ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
+                raise ScopeViolationException(asset=ip_str, target_id=target_id)
+
+            # 3. Loopback and private ranges are allowed only if explicitly in scope
+            if ip_obj.is_loopback or ip_obj.is_private:
+                if not self._is_ip_explicitly_in_scope(
+                    ip_obj=ip_obj,
+                    port=port,
+                    base_url=target.base_url,
+                    scope_items=target.scope_items,
+                ):
+                    raise ScopeViolationException(asset=ip_str, target_id=target_id)
+
+        return resolved_ips
 
 
 def validate_scope(target_id: uuid.UUID, asset: str, db: Session) -> bool:

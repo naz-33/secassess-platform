@@ -168,6 +168,7 @@ def test_zap_full_execution_workflow_mock():
     runner.scope_manager.check_scope = MagicMock(
         side_effect=lambda tid, url: (False, "Blocked") if "admin" in url else (True, "OK")
     )
+    runner.scope_manager.resolve_and_authorize = MagicMock(return_value=["127.0.0.1"])
 
     zap_responses = {
         "JSON/core/view/version/": {"version": "2.14.0"},
@@ -214,6 +215,7 @@ def test_zap_full_execution_workflow_mock():
 
 def test_zap_spider_timeout_is_not_reported_as_success():
     runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
+    runner.scope_manager.resolve_and_authorize = MagicMock(return_value=["127.0.0.1"])
     runner._request = MagicMock(
         side_effect=[
             {"scan": "101"},
@@ -230,6 +232,7 @@ def test_zap_spider_timeout_is_not_reported_as_success():
 def test_zap_spider_caps_depth_urls_and_filters_recursive_paths():
     runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
     runner.scope_manager.check_scope = MagicMock(return_value=(True, "OK"))
+    runner.scope_manager.resolve_and_authorize = MagicMock(return_value=["127.0.0.1"])
     requested_calls = []
     status_results = iter(({"status": "50"}, {"status": "100"}))
     urls = [
@@ -273,3 +276,19 @@ def test_zap_passive_scan_timeout_is_visible():
 
     with pytest.raises(TimeoutError, match="did not drain"):
         runner.wait_for_passive_scan(max_wait_seconds=0)
+
+
+def test_zap_aborts_before_spider_when_dns_resolves_out_of_scope():
+    from app.core.exceptions import ScopeViolationException
+
+    runner = ZapRunner(db=MagicMock(), target_id=uuid.uuid4())
+    runner.scope_manager.check_scope = MagicMock(return_value=(True, "OK"))
+    runner.scope_manager.resolve_and_authorize = MagicMock(
+        side_effect=ScopeViolationException(asset="169.254.169.254", target_id=runner.target_id)
+    )
+    runner._request = MagicMock()
+
+    with pytest.raises(ScopeViolationException):
+        runner.run_spider(target_url="https://example.com")
+
+    runner._request.assert_not_called()

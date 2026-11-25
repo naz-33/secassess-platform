@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List, Dict
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from app.modules.findings.cvss import validate_and_resolve_cvss, validate_cvss_vector_v3
 from app.modules.findings.models import (
     FindingSeverity,
     FindingStatus,
@@ -54,18 +55,25 @@ class SeverityUpdateRequest(BaseModel):
     severity: FindingSeverity
     justification: str = Field(..., min_length=10, description="Justification required for severity change.")
     cvss_score: Optional[float] = Field(None, ge=0.0, le=10.0, description="CVSS base score between 0.0 and 10.0.")
-    cvss_vector: Optional[str] = Field(None, max_length=100, description="Optional CVSS v3.1 vector string.")
+    cvss_vector: Optional[str] = Field(None, max_length=100, description="Optional CVSS v3.0/v3.1 vector string.")
 
     @field_validator("cvss_vector")
     @classmethod
     def validate_cvss_vector(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v.strip():
-            clean = v.strip()
-            # Loosely validate CVSS prefix
-            if not (clean.startswith("CVSS:3.") or clean.startswith("CVSS:4.")):
-                raise ValueError("CVSS vector must begin with CVSS:3.0, CVSS:3.1, or CVSS:4.0 prefix")
-            return clean
-        return v
+        return validate_cvss_vector_v3(v)
+
+    @model_validator(mode="after")
+    def validate_cvss_consistency(self) -> "SeverityUpdateRequest":
+        score, vector, derived_sev = validate_and_resolve_cvss(
+            severity=self.severity,
+            cvss_score=self.cvss_score,
+            cvss_vector=self.cvss_vector,
+        )
+        self.cvss_score = score
+        self.cvss_vector = vector
+        if derived_sev is not None:
+            self.severity = derived_sev
+        return self
 
 
 class SeverityChangeRead(BaseModel):
@@ -89,8 +97,8 @@ class FindingBase(BaseModel):
     category: str
     description: str
     severity: FindingSeverity
-    cvss_score: Optional[float] = None
-    cvss_vector: Optional[str] = None
+    cvss_score: Optional[float] = Field(None, ge=0.0, le=10.0, description="CVSS base score between 0.0 and 10.0.")
+    cvss_vector: Optional[str] = Field(None, max_length=100, description="Optional CVSS v3.0/v3.1 vector string.")
     wstg_id: Optional[str] = None
     owasp_top10: Optional[str] = None
     cwe: Optional[str] = None
@@ -103,7 +111,23 @@ class FindingBase(BaseModel):
 
 
 class FindingCreate(FindingBase):
-    pass
+    @field_validator("cvss_vector")
+    @classmethod
+    def validate_cvss_vector(cls, v: Optional[str]) -> Optional[str]:
+        return validate_cvss_vector_v3(v)
+
+    @model_validator(mode="after")
+    def validate_cvss_consistency(self) -> "FindingCreate":
+        score, vector, derived_sev = validate_and_resolve_cvss(
+            severity=self.severity,
+            cvss_score=self.cvss_score,
+            cvss_vector=self.cvss_vector,
+        )
+        self.cvss_score = score
+        self.cvss_vector = vector
+        if derived_sev is not None:
+            self.severity = derived_sev
+        return self
 
 
 class FindingRead(FindingBase):

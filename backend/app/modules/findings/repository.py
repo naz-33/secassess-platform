@@ -1,6 +1,7 @@
 import uuid
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy import select, func, or_, case
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from app.modules.findings.models import (
     Finding,
@@ -37,6 +38,32 @@ class FindingRepository:
         self.db.commit()
         self.db.refresh(finding)
         return finding
+
+    def get_or_create_by_fingerprint(self, finding: Finding) -> Tuple[Finding, bool]:
+        """
+        Atomically insert a finding or return the existing row matching (assessment_id, fingerprint).
+        Returns (finding, created).
+        """
+        if finding.fingerprint:
+            existing = self.get_by_fingerprint(finding.assessment_id, finding.fingerprint)
+            if existing:
+                return existing, False
+
+        try:
+            with self.db.begin_nested():
+                self.db.add(finding)
+                self.db.flush()
+            self.db.commit()
+            self.db.refresh(finding)
+            return finding, True
+        except IntegrityError:
+            if finding in self.db:
+                self.db.expunge(finding)
+            if finding.fingerprint:
+                existing = self.get_by_fingerprint(finding.assessment_id, finding.fingerprint)
+                if existing:
+                    return existing, False
+            raise
 
     def update(self, finding: Finding) -> Finding:
         self.db.add(finding)

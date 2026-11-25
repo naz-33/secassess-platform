@@ -33,7 +33,6 @@ from app.modules.web_assessment.checks import (
     check_cookie_attributes,
 )
 
-ALLOWED_OPTIONS = {"delay_ms", "max_requests", "per_request_timeout", "max_body_bytes"}
 ALLOWED_ZAP_OPTIONS = {"spider_max_depth", "spider_duration_mins", "run_active_scan"}
 
 
@@ -94,7 +93,8 @@ class WebAssessmentService:
         assessment_id: uuid.UUID,
         request: WebAssessmentRequest,
         background_tasks: BackgroundTasks,
-        user_id: Optional[uuid.UUID] = None,
+        *,
+        user_id: uuid.UUID,
     ) -> ScanRead:
         """
         Validate assessment, target, categories, and options before initiating scan.
@@ -122,13 +122,8 @@ class WebAssessmentService:
                         f"Unknown category '{cat}'. Allowed categories: {sorted(list(VALID_CATEGORIES))}"
                     )
 
-        # 4. Validate options allow-list
-        options = request.options or {}
-        for opt_key in options:
-            if opt_key not in ALLOWED_OPTIONS:
-                raise ValueError(
-                    f"Disallowed option '{opt_key}'. Allowed options: {sorted(list(ALLOWED_OPTIONS))}"
-                )
+        # 4. Extract validated execution options and validate ZAP options allow-list
+        options = request.options.model_dump(exclude_none=True) if request.options else {}
 
         zap_opts = request.zap_options or {}
         for z_key in zap_opts:
@@ -235,8 +230,11 @@ class WebAssessmentService:
             user_id=user_id,
             delay_ms=options.get("delay_ms"),
             max_requests=options.get("max_requests"),
+            per_request_timeout=options.get("per_request_timeout"),
+            max_body_bytes=options.get("max_body_bytes"),
+            scan_id=scan.id,
         )
-        tls_runner = TlsRunner()
+        tls_runner = TlsRunner(db=self.db, scan_id=scan.id)
         zap_runner = ZapRunner(db=self.db, target_id=target.id)
 
         full_transcript = f"=== Web Security Assessment for {target.base_url} ===\n"
@@ -447,8 +445,24 @@ class WebAssessmentService:
 
             all_candidates = _merge_zap_with_curl_candidates(all_candidates)
 
+            response_artifacts = {
+                resp.url: (resp.artifact_file_path, resp.artifact_sha256)
+                for resp in captured_responses
+                if resp.artifact_file_path
+            }
+
             # 8. Ingest Candidate Findings with Deduplication & Immutable Evidence
             for cand in all_candidates:
+                if not cand.artifact_file_path:
+                    artifact_info = response_artifacts.get(cand.affected_url)
+                    if not artifact_info and cand.affected_urls:
+                        for url in cand.affected_urls:
+                            artifact_info = response_artifacts.get(url)
+                            if artifact_info:
+                                break
+                    if artifact_info:
+                        cand.artifact_file_path, cand.artifact_sha256 = artifact_info
+
                 self.finding_service.ingest_candidate(
                     assessment_id=assessment.id,
                     scan_id=scan.id,
@@ -466,6 +480,8 @@ class WebAssessmentService:
                     evidence_content=cand.evidence_content,
                     evidence_label=cand.evidence_label,
                     evidence_type=EvidenceType.REQUEST_RESPONSE,
+                    artifact_file_path=cand.artifact_file_path,
+                    artifact_sha256=cand.artifact_sha256,
                 )
 
             # 9. Complete scan successfully

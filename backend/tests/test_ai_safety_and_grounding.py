@@ -41,7 +41,7 @@ def test_setup(db_session: Session, admin_user: User):
                 ScopeItemCreate(asset="127.0.0.1", in_scope=True),
                 ScopeItemCreate(asset="http://127.0.0.1:8000", in_scope=True),
             ],
-        )
+        ), user_id=admin_user.id
     )
     assessment = assessment_service.create_assessment(
         AssessmentCreate(name="Safety Assessment", target_id=target.id),

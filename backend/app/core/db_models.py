@@ -8,7 +8,7 @@ from app.modules.auth.models import User
 from app.modules.audit.models import AuditLog
 from app.modules.targets.models import Target, ScopeItem
 from app.modules.assessments.models import Assessment
-from app.modules.scans.models import Scan
+from app.modules.scans.models import Scan, ScanArtifact
 from app.modules.recon.models import Asset, AssetDiscovery
 from app.modules.findings.models import Finding, Evidence, SeverityChange
 from app.modules.ai_analysis.models import AIAnalysis
@@ -23,6 +23,7 @@ __all__ = [
     "ScopeItem",
     "Assessment",
     "Scan",
+    "ScanArtifact",
     "Asset",
     "AssetDiscovery",
     "Finding",

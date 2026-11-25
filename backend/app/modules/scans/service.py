@@ -42,7 +42,8 @@ class ScanService:
         assessment_id: uuid.UUID,
         scan_in: ScanCreate,
         background_tasks: Optional[BackgroundTasks] = None,
-        user_id: Optional[uuid.UUID] = None,
+        *,
+        user_id: uuid.UUID,
     ) -> ScanRead:
         """
         Validate target scope, initialize scan record, and enqueue background execution.

@@ -16,6 +16,12 @@ class AssessmentRepository:
             select(Assessment).where(Assessment.id == assessment_id)
         ).scalar_one_or_none()
 
+    def get_by_id_for_update(self, assessment_id: uuid.UUID) -> Optional[Assessment]:
+        stmt = select(Assessment).where(Assessment.id == assessment_id)
+        if self.db.bind and self.db.bind.dialect.name != "sqlite":
+            stmt = stmt.with_for_update()
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def create(self, assessment: Assessment) -> Assessment:
         self.db.add(assessment)
         self.db.commit()

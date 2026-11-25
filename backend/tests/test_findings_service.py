@@ -43,7 +43,7 @@ def test_finding_always_created_unverified_guard(db_session):
     assert "must always be created with status 'unverified'" in str(exc_info.value)
 
 
-def test_finding_deduplication_and_evidence_attachment(db_session):
+def test_finding_deduplication_and_evidence_attachment(db_session, admin_user):
     """
     Ingesting identical candidates across scan runs must de-duplicate into one finding,
     appending evidence rather than duplicating the finding row.
@@ -57,7 +57,7 @@ def test_finding_deduplication_and_evidence_attachment(db_session):
         TargetCreate(
             name=f"Deduplication Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
     assessment = ass_service.create_assessment(
         AssessmentCreate(
@@ -109,7 +109,7 @@ def test_finding_deduplication_and_evidence_attachment(db_session):
     assert "Raw transcript 2: Still no CSP found" in contents
 
 
-def test_evidence_stored_unchanged_and_retrievable(db_session):
+def test_evidence_stored_unchanged_and_retrievable(db_session, admin_user):
     """Raw HTTP transcript evidence must be stored exactly as captured."""
     target_service = TargetService(db_session)
     ass_service = AssessmentService(db_session)
@@ -119,7 +119,7 @@ def test_evidence_stored_unchanged_and_retrievable(db_session):
         TargetCreate(
             name=f"Evidence Target {uuid.uuid4().hex[:6]}",
             base_url="http://localhost:3000",
-        )
+        ), user_id=admin_user.id
     )
     assessment = ass_service.create_assessment(
         AssessmentCreate(

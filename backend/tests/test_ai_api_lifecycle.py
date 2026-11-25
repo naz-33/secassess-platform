@@ -30,7 +30,7 @@ def lifecycle_setup(db_session, admin_user: User):
                 ScopeItemCreate(asset="http://target.local", in_scope=True),
                 ScopeItemCreate(asset="target.local", in_scope=True),
             ],
-        )
+        ), user_id=admin_user.id
     )
     assessment = assessment_service.create_assessment(
         AssessmentCreate(name="Lifecycle Assessment", target_id=target.id),

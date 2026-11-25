@@ -1,5 +1,10 @@
+import json
 import uuid
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from app.core.database import SessionLocal
+from app.modules.audit.models import AuditLog
 
 
 def test_targets_crud_lifecycle(client: TestClient):
@@ -103,4 +108,79 @@ def test_targets_crud_lifecycle(client: TestClient):
     # Verify target is now deleted
     get_after_del = client.get(f"/api/v1/targets/{target_id}")
     assert get_after_del.status_code == 404
+
+
+def test_targets_mutations_record_audit_log_with_user_id(
+    client: TestClient,
+    assessor_user,
+):
+    """Every target/scope write route records an audit_log row with current_user.id."""
+    create_res = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"Audit Target {uuid.uuid4().hex[:6]}",
+            "base_url": "http://localhost:3000",
+        },
+    )
+    assert create_res.status_code == 201
+    target_id = create_res.json()["id"]
+
+    patch_res = client.patch(
+        f"/api/v1/targets/{target_id}",
+        json={"description": "Audited update"},
+    )
+    assert patch_res.status_code == 200
+
+    add_scope_res = client.post(
+        f"/api/v1/targets/{target_id}/scope",
+        json={"asset": "http://localhost:3000/api", "in_scope": True},
+    )
+    assert add_scope_res.status_code == 201
+    scope_item_id = add_scope_res.json()["id"]
+
+    val_res = client.post(
+        f"/api/v1/targets/{target_id}/scope/validate",
+        json={"asset": "http://localhost:3000/api/users"},
+    )
+    assert val_res.status_code == 200
+
+    del_scope_res = client.delete(f"/api/v1/targets/{target_id}/scope/{scope_item_id}")
+    assert del_scope_res.status_code == 204
+
+    del_target_res = client.delete(f"/api/v1/targets/{target_id}")
+    assert del_target_res.status_code == 204
+
+    expected_actions = {
+        "target_created",
+        "target_updated",
+        "scope_item_added",
+        "scope_validated",
+        "scope_item_deleted",
+        "target_deleted",
+    }
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.execute(
+                select(AuditLog)
+                .where(AuditLog.action.in_(list(expected_actions)))
+                .order_by(AuditLog.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        matched = {}
+        for row in rows:
+            if row.action in matched or not row.detail:
+                continue
+            detail = json.loads(row.detail)
+            if detail.get("target_id") == target_id:
+                matched[row.action] = row
+        assert set(matched.keys()) == expected_actions
+        for action, row in matched.items():
+            assert row.user_id == assessor_user.id, f"{action} had user_id={row.user_id}"
+    finally:
+        db.close()
+
 

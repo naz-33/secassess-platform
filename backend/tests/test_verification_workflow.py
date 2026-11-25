@@ -17,7 +17,7 @@ def test_finding_with_evidence(assessor_user):
         fs = FindingService(db)
 
         target = ts.create_target(
-            TargetCreate(name=f"Verif Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000")
+            TargetCreate(name=f"Verif Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000"), user_id=assessor_user.id
         )
         assessment = as_svc.create_assessment(
             AssessmentCreate(name="Verif Assessment", target_id=target.id, created_by=assessor_user.id)
@@ -47,7 +47,7 @@ def test_finding_without_evidence(assessor_user):
         fs = FindingService(db)
 
         target = ts.create_target(
-            TargetCreate(name=f"No Evidence Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000")
+            TargetCreate(name=f"No Evidence Target {uuid.uuid4().hex[:6]}", base_url="http://localhost:3000"), user_id=assessor_user.id
         )
         assessment = as_svc.create_assessment(
             AssessmentCreate(name="No Evidence Assessment", target_id=target.id, created_by=assessor_user.id)

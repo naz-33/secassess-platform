@@ -1,9 +1,11 @@
 """Generic, safe, tool-agnostic scan runner enforcing scope and security constraints."""
 import shlex
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple, Type
+from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,7 @@ from app.modules.audit import AuditService
 from app.modules.targets import TargetService
 from app.modules.recon import ReconService
 from app.modules.assessments.service import AssessmentService
+from app.modules.scans.artifacts import save_raw_artifact, to_raw_bytes
 from app.modules.scans.models import Scan, ScanStatus, ScanTool
 from app.modules.scans.repository import ScanRepository
 from app.modules.scans.validator import validate_scan_target
@@ -123,6 +126,53 @@ class ScanRunner:
             # Raise 403 exception without starting any subprocess
             raise ScopeViolationException(asset=target_to_scan, target_id=assessment.target_id)
 
+        # 6b. For Nmap, resolve DNS once, authorize all IPs, and pin validated IPs with -n
+        resolved_ips: Optional[list[str]] = None
+        if adapter.tool_name == ScanTool.NMAP.value:
+            target_port: Optional[int] = None
+            if str(target_to_scan).strip().startswith(("http://", "https://")):
+                target_port = urlsplit(str(target_to_scan).strip()).port
+            try:
+                resolved_ips = self.target_service.scope_manager.resolve_and_authorize(
+                    assessment.target_id,
+                    valid_host,
+                    target_port,
+                )
+            except ScopeViolationException as exc:
+                scan = Scan(
+                    assessment_id=assessment_id,
+                    tool=ScanTool(adapter.tool_name),
+                    command=command_str,
+                    status=ScanStatus.REJECTED,
+                    error=f"Scope violation: {exc.detail}",
+                    finished_at=datetime.now(timezone.utc),
+                )
+                created_rejected = self.repository.create(scan)
+                self.audit_service.log_action(
+                    action="scan_rejected",
+                    detail={
+                        "assessment_id": str(assessment_id),
+                        "scan_id": str(created_rejected.id),
+                        "tool": adapter.tool_name,
+                        "target": target_to_scan,
+                        "host": valid_host,
+                        "reason": str(exc.detail),
+                    },
+                    user_id=user_id,
+                )
+                raise
+
+            primary_ip = resolved_ips[0]
+            is_ipv6 = ":" in primary_ip
+            same_family_ips = [ip for ip in resolved_ips if (":" in ip) == is_ipv6]
+            argv = adapter.build_command(primary_ip, options or {})
+            argv.insert(1, "-n")
+            if is_ipv6:
+                argv.insert(1, "-6")
+            if len(same_family_ips) > 1:
+                argv.extend(same_family_ips[1:])
+            command_str = " ".join(shlex.quote(arg) for arg in argv)
+
         # 7. Concurrency checks
         running_scans = self.repository.list_running_by_assessment(assessment_id)
         if running_scans:
@@ -146,15 +196,18 @@ class ScanRunner:
         created_scan = self.repository.create(scan)
 
         # Audit entry: scan enqueued/started
+        start_detail: Dict[str, Any] = {
+            "assessment_id": str(assessment_id),
+            "scan_id": str(created_scan.id),
+            "tool": adapter.tool_name,
+            "target": target_to_scan,
+            "command": command_str,
+        }
+        if resolved_ips is not None:
+            start_detail["resolved_ips"] = resolved_ips
         self.audit_service.log_action(
             action="scan_started",
-            detail={
-                "assessment_id": str(assessment_id),
-                "scan_id": str(created_scan.id),
-                "tool": adapter.tool_name,
-                "target": target_to_scan,
-                "command": command_str,
-            },
+            detail=start_detail,
             user_id=user_id,
         )
 
@@ -209,31 +262,47 @@ class ScanRunner:
                 any_answer = False
                 for command in command_plan:
                     record_type = adapter.command_record_type(command)
-                    output_parts.append(
-                        f"$ {' '.join(shlex.quote(arg) for arg in command)}\n"
-                    )
+                    cmd_str = " ".join(shlex.quote(arg) for arg in command)
+                    output_parts.append(f"$ {cmd_str}\n")
+                    t_start = time.perf_counter()
                     proc = subprocess.run(
                         command,
                         shell=False,
                         capture_output=True,
-                        text=True,
+                        text=False,
                         timeout=timeout,
                     )
+                    duration_ms = (time.perf_counter() - t_start) * 1000.0
+                    raw_stdout_bytes = to_raw_bytes(proc.stdout)
+                    raw_stderr_bytes = to_raw_bytes(proc.stderr)
+                    save_raw_artifact(
+                        self.db,
+                        scan_id=scan.id,
+                        tool=scan.tool.value,
+                        stdout_bytes=raw_stdout_bytes,
+                        stderr_bytes=raw_stderr_bytes,
+                        command=cmd_str,
+                        exit_code=proc.returncode,
+                        duration_ms=duration_ms,
+                    )
+                    decoded_stdout = raw_stdout_bytes.decode("utf-8", errors="replace")
+                    decoded_stderr = raw_stderr_bytes.decode("utf-8", errors="replace")
+
                     if proc.returncode != 0:
                         execution_errors.append(
                             f"{record_type} query exited with status {proc.returncode}"
                         )
-                    if proc.stdout:
-                        output_parts.append(proc.stdout)
-                        any_answer = any_answer or bool(proc.stdout.strip())
-                        if not proc.stdout.endswith("\n"):
+                    if decoded_stdout:
+                        output_parts.append(decoded_stdout)
+                        any_answer = any_answer or bool(decoded_stdout.strip())
+                        if not decoded_stdout.endswith("\n"):
                             output_parts.append("\n")
-                    if proc.stderr:
+                    if decoded_stderr:
                         output_parts.append("[STDERR]\n")
-                        output_parts.append(proc.stderr)
-                        if not proc.stderr.endswith("\n"):
+                        output_parts.append(decoded_stderr)
+                        if not decoded_stderr.endswith("\n"):
                             output_parts.append("\n")
-                    if not proc.stdout.strip():
+                    if not decoded_stdout.strip():
                         output_parts.append(f"No {record_type} records returned\n")
                     raw_output = "".join(output_parts)
                 parse_output = raw_output
@@ -244,21 +313,38 @@ class ScanRunner:
                 raw_output = "".join(output_parts)
             else:
                 # Strict safe execution: shell=False, argv list, timeout enforced
+                cmd_str = " ".join(shlex.quote(arg) for arg in command_plan[0])
+                t_start = time.perf_counter()
                 proc = subprocess.run(
                     command_plan[0],
                     shell=False,
                     capture_output=True,
-                    text=True,
+                    text=False,
                     timeout=timeout,
                 )
-                raw_output = proc.stdout
-                parse_output = proc.stdout
+                duration_ms = (time.perf_counter() - t_start) * 1000.0
+                raw_stdout_bytes = to_raw_bytes(proc.stdout)
+                raw_stderr_bytes = to_raw_bytes(proc.stderr)
+                save_raw_artifact(
+                    self.db,
+                    scan_id=scan.id,
+                    tool=scan.tool.value,
+                    stdout_bytes=raw_stdout_bytes,
+                    stderr_bytes=raw_stderr_bytes,
+                    command=cmd_str,
+                    exit_code=proc.returncode,
+                    duration_ms=duration_ms,
+                )
+                decoded_stdout = raw_stdout_bytes.decode("utf-8", errors="replace")
+                decoded_stderr = raw_stderr_bytes.decode("utf-8", errors="replace")
+                raw_output = decoded_stdout
+                parse_output = decoded_stdout
                 if proc.returncode != 0:
                     execution_errors.append(f"Scanner exited with status {proc.returncode}")
-                if proc.stderr and not raw_output:
-                    raw_output = proc.stderr
-                elif proc.stderr:
-                    raw_output = f"{proc.stdout}\n[STDERR]\n{proc.stderr}"
+                if decoded_stderr and not raw_output:
+                    raw_output = decoded_stderr
+                elif decoded_stderr:
+                    raw_output = f"{decoded_stdout}\n[STDERR]\n{decoded_stderr}"
 
             scan.raw_output = raw_output
 

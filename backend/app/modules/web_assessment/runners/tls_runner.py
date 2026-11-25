@@ -1,10 +1,15 @@
 import datetime
+import shlex
 import shutil
 import socket
 import ssl
 import subprocess
+import time
+import uuid
 from typing import Dict, Any, Optional
+from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.modules.scans import save_raw_artifact, to_raw_bytes
 
 
 class TlsRunner:
@@ -13,8 +18,15 @@ class TlsRunner:
     Optionally delegates to testssl.sh if installed and configured.
     """
 
-    def __init__(self, testssl_path: Optional[str] = None):
+    def __init__(
+        self,
+        testssl_path: Optional[str] = None,
+        db: Optional[Session] = None,
+        scan_id: Optional[uuid.UUID] = None,
+    ):
         self.testssl_path = testssl_path or settings.TESTSSL_PATH
+        self.db = db
+        self.scan_id = scan_id
 
     def check_tls(self, host: str, port: int = 443, timeout: float = 5.0) -> Dict[str, Any]:
         """
@@ -100,15 +112,33 @@ class TlsRunner:
         # Step 3: Check for testssl.sh integration (skipped gracefully if absent)
         testssl_bin = shutil.which(self.testssl_path)
         if testssl_bin:
+            cmd = [testssl_bin, "--fast", "--quiet", "--color", "0", f"{host}:{port}"]
             try:
+                t_start = time.perf_counter()
                 proc = subprocess.run(
-                    [testssl_bin, "--fast", "--quiet", "--color", "0", f"{host}:{port}"],
+                    cmd,
                     capture_output=True,
-                    text=True,
+                    text=False,
                     timeout=30,
                     shell=False,
                 )
-                result["raw_output"] += f"\n[testssl.sh output]\n{proc.stdout}"
+                duration_ms = (time.perf_counter() - t_start) * 1000.0
+                raw_stdout_bytes = to_raw_bytes(proc.stdout)
+                raw_stderr_bytes = to_raw_bytes(proc.stderr)
+                decoded_stdout = raw_stdout_bytes.decode("utf-8", errors="replace")
+                if self.db is not None and self.scan_id is not None:
+                    save_raw_artifact(
+                        self.db,
+                        scan_id=self.scan_id,
+                        tool="testssl",
+                        stdout_bytes=raw_stdout_bytes,
+                        stderr_bytes=raw_stderr_bytes,
+                        command=" ".join(shlex.quote(arg) for arg in cmd),
+                        target_url=f"{host}:{port}",
+                        exit_code=proc.returncode,
+                        duration_ms=duration_ms,
+                    )
+                result["raw_output"] += f"\n[testssl.sh output]\n{decoded_stdout}"
             except Exception as testssl_err:
                 result["raw_output"] += f"\n[testssl.sh error: {testssl_err}]\n"
 

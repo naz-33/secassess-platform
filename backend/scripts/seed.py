@@ -72,7 +72,14 @@ def seed_database() -> None:
                 notes="Primary application target in Docker compose network",
             )
             db.add(scope_item)
-            logger.info("Created target '%s' with default scope item.", target_name)
+            cidr_scope_item = ScopeItem(
+                target_id=target.id,
+                asset="172.30.0.0/24",
+                in_scope=True,
+                notes="In-scope CIDR for local targets on secassess_scan_net",
+            )
+            db.add(cidr_scope_item)
+            logger.info("Created target '%s' with default scope items.", target_name)
         else:
             logger.info("Target '%s' already exists, skipping.", target_name)
 

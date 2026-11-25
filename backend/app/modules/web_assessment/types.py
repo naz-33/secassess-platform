@@ -14,6 +14,8 @@ class CapturedResponse:
     elapsed_ms: float = 0.0
     raw_text: str = ""
     truncated: bool = False
+    artifact_file_path: Optional[str] = None
+    artifact_sha256: Optional[str] = None
 
     def get_header(self, name: str) -> Optional[str]:
         """Case-insensitive lookup of first header value."""
@@ -49,4 +51,6 @@ class CandidateFinding:
     remediation: Optional[str] = None
     evidence_label: Optional[str] = None
     evidence_content: Optional[str] = None
+    artifact_file_path: Optional[str] = None
+    artifact_sha256: Optional[str] = None
     affected_urls: List[str] = field(default_factory=list)

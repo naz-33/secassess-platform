@@ -32,7 +32,7 @@ def assessment_with_dashboard_data(admin_user):
                     ScopeItemCreate(asset="http://127.0.0.1:8080", in_scope=True, notes="Main web app"),
                     ScopeItemCreate(asset="http://127.0.0.1:9090", in_scope=False, notes="Out of scope admin"),
                 ],
-            )
+            ), user_id=admin_user.id
         )
 
         assessment_service = AssessmentService(db)

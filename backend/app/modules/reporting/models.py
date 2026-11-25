@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 from typing import Optional, Any
-from sqlalchemy import String, DateTime, ForeignKey, Integer, BigInteger, Enum, Text, JSON, func
+from sqlalchemy import String, DateTime, ForeignKey, Integer, BigInteger, Enum, Text, JSON, UniqueConstraint, Index, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -108,4 +108,15 @@ class Report(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "version", name="uq_reports_assessment_version"),
+        Index(
+            "uq_reports_one_pending_per_assessment",
+            "assessment_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'pending')"),
+            sqlite_where=text("status IN ('PENDING', 'pending')"),
+        ),
     )

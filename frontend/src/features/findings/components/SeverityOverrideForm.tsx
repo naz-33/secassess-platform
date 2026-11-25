@@ -40,11 +40,22 @@ export function SeverityOverrideForm({ finding }: SeverityOverrideFormProps) {
         setErrorMsg("CVSS score must be a number between 0.0 and 10.0.");
         return false;
       }
+      if (!cvssVector.trim()) {
+        setErrorMsg("A CVSS v3.0 or v3.1 vector is required when providing a CVSS score.");
+        return false;
+      }
     }
 
-    if (cvssVector.trim() && !cvssVector.startsWith("CVSS:3.1/") && !cvssVector.startsWith("CVSS:3.0/")) {
-      setErrorMsg("CVSS vector must start with CVSS:3.1/ or CVSS:3.0/");
-      return false;
+    if (cvssVector.trim()) {
+      const clean = cvssVector.trim();
+      if (clean.startsWith("CVSS:4.")) {
+        setErrorMsg("CVSS v4.0 vectors are not supported. Please use a CVSS v3.0 or v3.1 vector.");
+        return false;
+      }
+      if (!clean.startsWith("CVSS:3.1/") && !clean.startsWith("CVSS:3.0/")) {
+        setErrorMsg("CVSS vector must start with CVSS:3.1/ or CVSS:3.0/");
+        return false;
+      }
     }
 
     return true;

@@ -40,7 +40,7 @@ def _wait_for_local_lab(db, target_id: uuid.UUID) -> None:
     pytest.fail(f"Local Juice Shop/ZAP services were not ready: {last_error}")
 
 
-def test_local_lab_scanner_and_web_assessment_workflows(client: TestClient):
+def test_local_lab_scanner_and_web_assessment_workflows(client: TestClient, admin_user):
     db = SessionLocal()
     try:
         target = TargetService(db).create_target(
@@ -54,7 +54,7 @@ def test_local_lab_scanner_and_web_assessment_workflows(client: TestClient):
                         notes="Deliberate local scope boundary",
                     )
                 ],
-            )
+            ), user_id=admin_user.id
         )
         assessment = AssessmentService(db).create_assessment(
             AssessmentCreate(
@@ -122,7 +122,7 @@ def test_local_lab_scanner_and_web_assessment_workflows(client: TestClient):
                     "spider_duration_mins": 1,
                     "run_active_scan": False,
                 },
-                "options": {"delay_ms": 0, "max_requests": 40},
+                "options": {"delay_ms": 250, "max_requests": 40},
             },
         )
         assert response.status_code == 202

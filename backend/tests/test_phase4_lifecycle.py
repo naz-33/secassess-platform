@@ -151,7 +151,7 @@ def test_phase4_full_lifecycle_dual_mounts(
         json={
             "severity": "critical",
             "justification": "Elevating finding severity due to critical data exposure.",
-            "cvss_score": 9.3,
+            "cvss_score": 9.8,
             "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
         },
     )

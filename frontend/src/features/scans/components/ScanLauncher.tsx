@@ -76,7 +76,7 @@ export function ScanLauncher({ assessmentId, defaultTarget = "" }: ScanLauncherP
           }
         : {},
       options: {
-        delay_ms: 100,
+        delay_ms: 250,
         max_requests: 50,
       },
     });

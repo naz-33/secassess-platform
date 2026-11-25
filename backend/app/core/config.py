@@ -29,8 +29,9 @@ class Settings(BaseSettings):
     MIN_VERIFICATION_NOTE_LENGTH: int = 10
     MIN_JUSTIFICATION_LENGTH: int = 10
 
-    # Evidence Uploads
+    # Evidence Uploads & Tool Artifacts
     UPLOAD_DIR: str = "uploads"
+    ARTIFACT_DIR: str = "artifacts"
     MAX_UPLOAD_BYTES: int = 5 * 1024 * 1024  # 5 MB default
 
     # CORS
@@ -60,6 +61,7 @@ class Settings(BaseSettings):
 
     # Tool Executables & Scan Configuration
     NMAP_PATH: str = "nmap"
+    NMAP_MAX_CUSTOM_PORTS: int = 1000
     DIG_PATH: str = "dig"
     NSLOOKUP_PATH: str = "nslookup"
     CURL_PATH: str = "curl"

@@ -1,3 +1,4 @@
+import socket
 import subprocess
 import uuid
 from pathlib import Path
@@ -30,7 +31,7 @@ def db_session():
 
 
 @pytest.fixture
-def target_and_assessment(db_session: Session):
+def target_and_assessment(db_session: Session, admin_user):
     """Fixture providing a target with defined scope and an assessment."""
     target_svc = TargetService(db_session)
     target = target_svc.create_target(
@@ -42,7 +43,7 @@ def target_and_assessment(db_session: Session):
                 ScopeItemCreate(asset="http://localhost:3000/api", in_scope=True),
                 ScopeItemCreate(asset="http://localhost:3000/admin", in_scope=False),
             ],
-        )
+        ), user_id=admin_user.id
     )
 
     assessment_svc = AssessmentService(db_session)
@@ -375,3 +376,72 @@ def test_scan_runner_dns_stores_query_commands_answers_and_assets(
 
     assets = ReconService(db_session).list_assets(assessment.id, scan_id=scan.id)
     assert {asset.value for asset in assets} == {"127.0.0.1", "::1"}
+
+
+def test_scan_runner_nmap_pins_validated_ip_and_adds_dash_n(db_session: Session, admin_user):
+    """Nmap receives the validated IP instead of hostname, includes -n, and logs resolved_ips."""
+    target = TargetService(db_session).create_target(
+        TargetCreate(
+            name=f"Nmap Pin Target {uuid.uuid4().hex[:6]}",
+            base_url="https://app.example.com",
+        ), user_id=admin_user.id
+    )
+    assessment = AssessmentService(db_session).create_assessment(
+        AssessmentCreate(name="Nmap Pin Assessment", target_id=target.id)
+    )
+    xml_content = (FIXTURES_DIR / "nmap_open_ports.xml").read_text(encoding="utf-8")
+    mock_proc = MagicMock(stdout=xml_content, stderr="", returncode=0)
+    addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))]
+
+    runner = ScanRunner(db_session)
+    with patch("socket.getaddrinfo", return_value=addrinfo), patch(
+        "subprocess.run", return_value=mock_proc
+    ) as mock_sub:
+        scan = runner.run(
+            assessment_id=assessment.id,
+            tool="nmap",
+            target="https://app.example.com",
+        )
+
+    assert scan.status == ScanStatus.COMPLETED
+    cmd = mock_sub.call_args[0][0]
+    assert "-n" in cmd
+    assert "93.184.216.34" in cmd
+    assert "app.example.com" not in cmd
+
+    audit_repo = AuditRepository(db_session)
+    logs = audit_repo.list_entries(limit=10)
+    assert any(
+        log.action == "scan_started" and "93.184.216.34" in str(log.detail)
+        for log in logs
+    )
+
+
+def test_scan_runner_nmap_rejects_hostname_resolving_to_out_of_scope_ip(db_session: Session, admin_user):
+    """Nmap scan is rejected and logged when authorized hostname resolves to a private/out-of-scope IP."""
+    target = TargetService(db_session).create_target(
+        TargetCreate(
+            name=f"Nmap Bad DNS Target {uuid.uuid4().hex[:6]}",
+            base_url="https://app.example.com",
+        ), user_id=admin_user.id
+    )
+    assessment = AssessmentService(db_session).create_assessment(
+        AssessmentCreate(name="Nmap Bad DNS Assessment", target_id=target.id)
+    )
+    addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.5", 443))]
+    runner = ScanRunner(db_session)
+
+    with patch("socket.getaddrinfo", return_value=addrinfo), patch("subprocess.run") as mock_sub:
+        with pytest.raises(ScopeViolationException):
+            runner.run(
+                assessment_id=assessment.id,
+                tool="nmap",
+                target="https://app.example.com",
+            )
+        mock_sub.assert_not_called()
+
+    scans = runner.repository.list_by_assessment(assessment.id)
+    assert any(s.status == ScanStatus.REJECTED for s in scans)
+    audit_repo = AuditRepository(db_session)
+    logs = audit_repo.list_entries(limit=10)
+    assert any(log.action == "scan_rejected" for log in logs)
