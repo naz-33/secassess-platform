@@ -474,3 +474,97 @@ def test_nmap_scan_endpoint_rejects_unbounded_custom_ports_and_accepts_valid_lis
             json={"tool": "nmap", "options": {"ports": "80,80,443"}},
         )
         assert ok_res.status_code == 202
+
+
+def test_web_assessment_background_worker_persists_after_request_session_closes(client: TestClient):
+    """
+    Regression test: POST /web-assessment must schedule the top-level worker with primitive
+    args so background execution uses an isolated SessionLocal() after the request session closes,
+    persisting completed scan status and findings.
+    """
+    from app.core.database import SessionLocal
+    from app.modules.web_assessment.service import _run_web_assessment_background_worker
+
+    target_res = client.post(
+        "/api/v1/targets/",
+        json={
+            "name": f"BG Session Target {uuid.uuid4().hex[:6]}",
+            "base_url": "http://localhost:3000",
+        },
+    )
+    assert target_res.status_code == 201
+    ass_res = client.post(
+        "/api/v1/assessments/",
+        json={"name": "BG Session Assessment", "target_id": target_res.json()["id"]},
+    )
+    assert ass_res.status_code == 201
+    assessment_id = ass_res.json()["id"]
+
+    raw_juiceshop = (FIXTURES_DIR / "juiceshop_response.txt").read_text(encoding="utf-8")
+    mock_curl = MagicMock(stdout=raw_juiceshop, stderr="", returncode=0)
+
+    with (
+        patch("subprocess.run", return_value=mock_curl),
+        patch("app.modules.web_assessment.runners.curl_runner.time.sleep"),
+        patch(
+            "app.modules.web_assessment.service.TlsRunner.check_tls",
+            return_value={"https_available": False, "raw_output": "TLS probe mocked"},
+        ),
+        patch(
+            "app.modules.web_assessment.service._run_web_assessment_background_worker",
+            wraps=_run_web_assessment_background_worker,
+        ) as spy_worker,
+    ):
+        res = client.post(
+            f"/api/v1/assessments/{assessment_id}/web-assessment",
+            json={"categories": ["security_headers"], "include_zap": False},
+        )
+        assert res.status_code == 202
+        scan_id = res.json()["id"]
+
+        assert spy_worker.call_count == 1
+        worker_args = spy_worker.call_args.args
+        assert worker_args[0] == uuid.UUID(assessment_id)
+        assert worker_args[1] == uuid.UUID(scan_id)
+        assert isinstance(worker_args[2], dict)
+        assert worker_args[2]["categories"] == ["security_headers"]
+
+    # Verify persisted scan status and findings in a fresh session
+    scan_res = client.get(f"/api/v1/assessments/{assessment_id}/scans/{scan_id}")
+    assert scan_res.status_code == 200
+    assert scan_res.json()["status"] == "completed"
+
+    findings_res = client.get(f"/api/v1/assessments/{assessment_id}/findings")
+    assert findings_res.status_code == 200
+    assert len(findings_res.json()) > 0
+
+    # Also verify worker failure handling marks scan failed and writes audit log
+    with patch(
+        "app.modules.web_assessment.service.WebAssessmentService.execute_web_assessment",
+        side_effect=RuntimeError("simulated worker crash"),
+    ):
+        fail_res = client.post(
+            f"/api/v1/assessments/{assessment_id}/web-assessment",
+            json={"categories": ["security_headers"], "include_zap": False},
+        )
+        assert fail_res.status_code == 202
+        failed_scan_id = fail_res.json()["id"]
+
+    failed_scan_res = client.get(f"/api/v1/assessments/{assessment_id}/scans/{failed_scan_id}")
+    assert failed_scan_res.status_code == 200
+    assert failed_scan_res.json()["status"] == "failed"
+    assert "simulated worker crash" in failed_scan_res.json()["error"]
+
+    from app.modules.audit import AuditService
+
+    db = SessionLocal()
+    try:
+        logs = AuditService(db).list_logs(limit=20)
+        assert any(
+            log.action == "web_assessment_failed"
+            and failed_scan_id in str(log.detail)
+            and "simulated worker crash" in str(log.detail)
+            for log in logs
+        )
+    finally:
+        db.close()

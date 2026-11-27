@@ -1,10 +1,12 @@
 import datetime
+import logging
 import urllib.parse
 import uuid
 from typing import List, Dict, Any, Optional
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
+from app.core.database import SessionLocal
 from app.core.exceptions import NotFoundException, ScopeViolationException
 from app.modules.assessments import AssessmentService
 from app.modules.targets import TargetService
@@ -34,6 +36,56 @@ from app.modules.web_assessment.checks import (
 )
 
 ALLOWED_ZAP_OPTIONS = {"spider_max_depth", "spider_duration_mins", "run_active_scan"}
+
+logger = logging.getLogger(__name__)
+
+
+def _run_web_assessment_background_worker(
+    assessment_id: uuid.UUID,
+    scan_id: uuid.UUID,
+    config: Dict[str, Any],
+) -> None:
+    """Background worker task executing web assessment in an isolated database session."""
+    db = SessionLocal()
+    raw_user_id = config.get("user_id")
+    user_id = uuid.UUID(raw_user_id) if isinstance(raw_user_id, str) else raw_user_id
+    try:
+        service = WebAssessmentService(db)
+        service.execute_web_assessment(
+            scan_id=scan_id,
+            categories=config["categories"],
+            include_zap=config.get("include_zap", False),
+            zap_options=config.get("zap_options", {}),
+            options=config.get("options", {}),
+            user_id=user_id,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Error executing background web assessment %s: %s", scan_id, exc)
+        try:
+            scan_service = ScanService(db)
+            scan = scan_service.repository.get_by_id(scan_id)
+            if scan and scan.status in (ScanStatus.PENDING, ScanStatus.RUNNING):
+                scan.status = ScanStatus.FAILED
+                scan.error = f"Web assessment failure: {exc}"
+                scan.finished_at = datetime.datetime.now(datetime.timezone.utc)
+                scan_service.repository.update(scan)
+            AuditService(db).log_action(
+                action="web_assessment_failed",
+                detail={
+                    "assessment_id": str(assessment_id),
+                    "scan_id": str(scan_id),
+                    "error": str(exc),
+                },
+                user_id=user_id,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to record failure state for web assessment scan %s", scan_id)
+    finally:
+        db.close()
 
 
 def _candidate_identity(candidate: CandidateFinding) -> tuple[str, str, str]:
@@ -186,15 +238,19 @@ class WebAssessmentService:
             user_id=user_id,
         )
 
-        # 9. Enqueue background execution
+        # 9. Enqueue background execution with primitive arguments only
+        worker_config: Dict[str, Any] = {
+            "categories": list(categories),
+            "include_zap": bool(request.include_zap),
+            "zap_options": dict(zap_opts),
+            "options": dict(options),
+            "user_id": str(user_id) if user_id is not None else None,
+        }
         background_tasks.add_task(
-            self.execute_web_assessment,
-            scan_id=created_scan.id,
-            categories=categories,
-            include_zap=request.include_zap,
-            zap_options=zap_opts,
-            options=options,
-            user_id=user_id,
+            _run_web_assessment_background_worker,
+            created_scan.assessment_id,
+            created_scan.id,
+            worker_config,
         )
 
         return ScanRead.model_validate(created_scan)
@@ -217,12 +273,38 @@ class WebAssessmentService:
         if not scan:
             raise NotFoundException("Scan", scan_id)
 
+        assessment = self.assessment_service.get_assessment(scan.assessment_id)
+        if not assessment:
+            raise NotFoundException("Assessment", scan.assessment_id)
+        target = self.target_service.get_target(assessment.target_id)
+        if not target:
+            raise NotFoundException("Target", assessment.target_id)
+
+        # Re-check scope enforcement inside worker execution
+        in_scope, reason = self.target_service.scope_manager.check_scope(
+            assessment.target_id, target.base_url
+        )
+        if not in_scope:
+            scan.status = ScanStatus.REJECTED
+            scan.error = f"Scope violation: {reason}"
+            scan.finished_at = datetime.datetime.now(datetime.timezone.utc)
+            self.scan_service.repository.update(scan)
+            self.audit_service.log_action(
+                action="scan_rejected",
+                detail={
+                    "assessment_id": str(assessment.id),
+                    "scan_id": str(scan.id),
+                    "tool": "curl",
+                    "target": target.base_url,
+                    "reason": reason,
+                },
+                user_id=user_id,
+            )
+            raise ScopeViolationException(asset=target.base_url, target_id=assessment.target_id)
+
         scan.status = ScanStatus.RUNNING
         scan.started_at = datetime.datetime.now(datetime.timezone.utc)
         self.scan_service.repository.update(scan)
-
-        assessment = self.assessment_service.get_assessment(scan.assessment_id)
-        target = self.target_service.get_target(assessment.target_id)
 
         curl_runner = CurlRunner(
             db=self.db,
@@ -505,6 +587,8 @@ class WebAssessmentService:
             return scan
 
         except Exception as exc:
+            self.db.rollback()
+            scan = self.scan_service.repository.get_by_id(scan_id) or scan
             scan.status = ScanStatus.FAILED
             scan.error = f"Web assessment failure: {exc}"
             scan.finished_at = datetime.datetime.now(datetime.timezone.utc)
@@ -513,7 +597,7 @@ class WebAssessmentService:
 
             self.audit_service.log_action(
                 action="web_assessment_failed",
-                detail={"assessment_id": str(assessment.id), "scan_id": str(scan.id), "error": str(exc)},
+                detail={"assessment_id": str(scan.assessment_id), "scan_id": str(scan.id), "error": str(exc)},
                 user_id=user_id,
             )
             return scan
