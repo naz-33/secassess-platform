@@ -133,7 +133,7 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-The Docker setup uses development defaults and does not require an AI API key. To use optional AI or ZAP integrations, edit `.env` and configure the relevant keys (`GEMINI_API_KEY` and/or `ZAP_API_KEY`). The Gemini model defaults to `gemini-3-flash-preview` and can be overridden via `GEMINI_MODEL`. Do not share or commit your `.env` file. The sample credentials and secrets are for local development only; replace them before any non-local deployment.
+The Docker setup uses development defaults and does not require an AI API key. To use optional AI or ZAP integrations, edit `.env` and configure the relevant keys (`GEMINI_API_KEY` and/or `ZAP_API_KEY`). The Gemini model defaults to `gemini-3.8-flash` and can be overridden via `GEMINI_MODEL` in `.env`. Do not share or commit your `.env` file. The sample credentials and secrets are for local development only; replace them before any non-local deployment.
 
 ### Step 4: Build and start the application
 
